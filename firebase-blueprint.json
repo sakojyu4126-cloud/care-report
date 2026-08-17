@@ -1,0 +1,44 @@
+{
+  "entities": {
+    "Resident": {
+      "title": "Resident",
+      "description": "A facility resident",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kana": { "type": "string" },
+        "roomNumber": { "type": "string" },
+        "careLevel": { "type": "string" },
+        "memo": { "type": "string" }
+      },
+      "required": ["id", "name", "kana", "roomNumber"]
+    },
+    "CareReport": {
+      "title": "CareReport",
+      "description": "Daily care report containing shift records and instructions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "residentId": { "type": "string" },
+        "date": { "type": "string" },
+        "morning": { "type": "object" },
+        "noon": { "type": "object" },
+        "night": { "type": "object" },
+        "yamamotoInstructions": { "type": "object" },
+        "confirmedByDirector": { "type": "boolean" }
+      },
+      "required": ["id", "residentId", "date"]
+    }
+  },
+  "firestore": {
+    "residents/{residentId}": {
+      "schema": "Resident",
+      "description": "Collection of facility residents"
+    },
+    "reports/{reportId}": {
+      "schema": "CareReport",
+      "description": "Collection of daily care reports"
+    }
+  }
+}

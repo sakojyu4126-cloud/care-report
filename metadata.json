@@ -1,0 +1,6 @@
+{
+  "name": "利用者様ケアレポート",
+  "description": "訪問介護事業所およびサービス付き高齢者向け住宅（サ高住）で共有される、高齢入居者様の心身状況変化報告（朝・昼・夜シフト、バイタル推移、食事量、医師指示欄、確認管理機能）を直感的に共有・検索・可視化できる現場向けの管理ツール。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
