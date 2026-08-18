@@ -16,6 +16,14 @@ interface ReportFormModalProps {
   onDeleteReport?: (reportId: string) => void;
 }
 
+const getTodayDateString = (): string => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
 export default function ReportFormModal({
   isOpen = false,
   onClose,
@@ -161,7 +169,7 @@ export default function ReportFormModal({
       } else {
         // New record mode - Start with blank selection so it doesn't prefill automatically
         setSelectedResId(initialResidentId || '');
-        setDate(initialDate || new Date().toISOString().substring(0, 10));
+        setDate(initialDate || getTodayDateString());
         setShift(initialShift || 'morning');
         setReporter('');
         setOtherText('');

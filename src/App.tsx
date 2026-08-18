@@ -29,6 +29,14 @@ import {
 import { collection, onSnapshot, setDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
 import { db } from './lib/firebase';
 
+const getTodayDateString = (): string => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
 export default function App() {
   // --- 1. LOCAL STORAGE & FIRESTORE STATE INITIALIZATION ---
   const [residents, setResidents] = useState<Resident[]>(() => {
@@ -192,8 +200,26 @@ export default function App() {
   }, [reports]);
 
   // --- 2. DISPLAY FILTER STATES ---
-  // Default to 2026-07-05 (the exact date in the handwritten sheet to show all transcribed reports immediately!)
-  const [selectedDate, setSelectedDate] = useState<string>('2026-07-05');
+  // Default to today's date so the app always opens to the current date and time
+  const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
+
+  // Compute Japanese day of week for the currently selected date
+  const selectedDayOfWeek = useMemo(() => {
+    if (!selectedDate) return '';
+    const parts = selectedDate.split('-');
+    if (parts.length === 3) {
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10) - 1;
+      const d = parseInt(parts[2], 10);
+      const dateObj = new Date(y, m, d);
+      if (!isNaN(dateObj.getTime())) {
+        const days = ['日', '月', '火', '水', '木', '金', '土'];
+        return days[dateObj.getDay()];
+      }
+    }
+    return '';
+  }, [selectedDate]);
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [searchRangeDays, setSearchRangeDays] = useState<number>(5);
   const [appMode, setAppMode] = useState<'view_instruct' | 'helper'>('view_instruct');
@@ -718,39 +744,60 @@ export default function App() {
       
       {/* ==================== UPPER BLOCK: FIRST ROW HEADER ==================== */}
       <header className="bg-emerald-600 text-white shadow-md border-b border-emerald-700 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col lg:flex-row items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 py-2.5 sm:py-3 flex flex-col lg:flex-row items-center justify-between gap-3 sm:gap-4">
           
           {/* Left Title Area */}
           <div className="flex items-center">
-            <h1 className="text-2xl font-black tracking-tight text-white select-none">
+            <h1 className="text-xl sm:text-2xl font-black tracking-tight text-white select-none">
               利用者様ケアレポート
             </h1>
           </div>
 
-          {/* Date Selector and Navigation (Larger & Smartphone-friendly White Theme as requested) */}
-          <div className="flex items-center space-x-3 bg-white px-4 py-2.5 rounded-xl border-2 border-emerald-500 shadow-md">
+          {/* Date Selector and Navigation (Includes Day of Week in same container) */}
+          <div className="flex items-center space-x-2 sm:space-x-3 bg-white px-3 sm:px-4 py-2 rounded-xl border-2 border-emerald-500 shadow-md">
             <button 
               onClick={() => handleMoveDate(-1)}
-              className="text-slate-700 hover:text-emerald-600 px-3 py-1 rounded-lg text-lg font-black transition-colors animate-press"
+              className="text-slate-700 hover:text-emerald-600 px-2.5 py-1 rounded-lg text-base sm:text-lg font-black transition-colors cursor-pointer"
               title="前日へ"
             >
               ◀
             </button>
-            <div className="flex items-center space-x-2 text-lg font-black text-slate-900">
-              <Calendar className="h-5 w-5 text-emerald-600" />
+            <div className="flex items-center space-x-1.5 text-base sm:text-lg font-black text-slate-900">
+              <Calendar className="h-5 w-5 text-emerald-600 shrink-0" />
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-slate-900 font-mono font-black text-lg focus:outline-none cursor-pointer"
+                className="bg-transparent text-slate-900 font-mono font-black text-sm sm:text-base focus:outline-none cursor-pointer"
               />
+              {selectedDayOfWeek && (
+                <span className={`text-sm sm:text-base font-black ${
+                  selectedDayOfWeek === '日' ? 'text-red-600' :
+                  selectedDayOfWeek === '土' ? 'text-blue-600' : 'text-slate-900'
+                }`}>
+                  （{selectedDayOfWeek}）
+                </span>
+              )}
             </div>
             <button 
               onClick={() => handleMoveDate(1)}
-              className="text-slate-700 hover:text-emerald-600 px-3 py-1 rounded-lg text-lg font-black transition-colors animate-press"
+              className="text-slate-700 hover:text-emerald-600 px-2.5 py-1 rounded-lg text-base sm:text-lg font-black transition-colors cursor-pointer"
               title="翌日へ"
             >
               ▶
+            </button>
+
+            {/* Quick jump to Today button */}
+            <button
+              onClick={() => setSelectedDate(getTodayDateString())}
+              className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer border shadow-3xs ${
+                selectedDate === getTodayDateString()
+                  ? 'bg-emerald-700 text-white border-emerald-800'
+                  : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border-slate-300'
+              }`}
+              title="本日の日付を表示"
+            >
+              今日
             </button>
           </div>
 
