@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Resident, CareReport } from './types';
 import { initialResidents } from './data/initialResidents';
 import { initialReports } from './data/mockReports';
@@ -202,6 +202,7 @@ export default function App() {
   // --- 2. DISPLAY FILTER STATES ---
   // Default to today's date so the app always opens to the current date and time
   const [selectedDate, setSelectedDate] = useState<string>(() => getTodayDateString());
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   // Compute Japanese day of week for the currently selected date
   const selectedDayOfWeek = useMemo(() => {
@@ -426,12 +427,28 @@ export default function App() {
   }, [selectedDate, searchRangeDays]);
 
   const formatDateJapanese = (dateStr: string) => {
-    const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return dateStr;
-    const mm = d.getMonth() + 1;
-    const dd = d.getDate();
-    const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
-    return `${mm}月${dd}日 (${dayOfWeek})`;
+    if (!dateStr) return '';
+    try {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const d = parseInt(parts[2], 10);
+        const dateObj = new Date(y, m - 1, d);
+        if (!isNaN(dateObj.getTime())) {
+          const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][dateObj.getDay()];
+          return `${m}月${d}日 (${dayOfWeek})`;
+        }
+      }
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      const mm = d.getMonth() + 1;
+      const dd = d.getDate();
+      const dayOfWeek = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
+      return `${mm}月${dd}日 (${dayOfWeek})`;
+    } catch {
+      return dateStr;
+    }
   };
 
   const renderCompactBadges = (shift: any) => {
@@ -729,14 +746,31 @@ export default function App() {
     setIsFormOpen(true);
   };
 
-  // Quick helper to jump dates
+  // Quick helper to jump dates safely avoiding timezone jumps
   const handleMoveDate = (days: number) => {
-    const current = new Date(selectedDate);
-    current.setDate(current.getDate() + days);
-    const yyyy = current.getFullYear();
-    const mm = String(current.getMonth() + 1).padStart(2, '0');
-    const dd = String(current.getDate()).padStart(2, '0');
-    setSelectedDate(`${yyyy}-${mm}-${dd}`);
+    try {
+      const baseStr = selectedDate || getTodayDateString();
+      const parts = baseStr.split('-');
+      let current: Date;
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = parseInt(parts[2], 10);
+        current = new Date(y, m, d);
+      } else {
+        current = new Date();
+      }
+      if (isNaN(current.getTime())) {
+        current = new Date();
+      }
+      current.setDate(current.getDate() + days);
+      const yyyy = current.getFullYear();
+      const mm = String(current.getMonth() + 1).padStart(2, '0');
+      const dd = String(current.getDate()).padStart(2, '0');
+      setSelectedDate(`${yyyy}-${mm}-${dd}`);
+    } catch (e) {
+      console.error("Error moving date:", e);
+    }
   };
 
   return (
@@ -753,51 +787,48 @@ export default function App() {
             </h1>
           </div>
 
-          {/* Date Selector and Navigation (Includes Day of Week in same container) */}
-          <div className="flex items-center space-x-2 sm:space-x-3 bg-white px-3 sm:px-4 py-2 rounded-xl border-2 border-emerald-500 shadow-md">
+          {/* Date Selector and Navigation (Single Calendar Icon at right, Larger Font, Fully Clickable) */}
+          <div className="flex items-center space-x-2 sm:space-x-3 bg-white px-4 sm:px-5 py-2.5 rounded-xl border-2 border-emerald-500 shadow-md">
             <button 
               onClick={() => handleMoveDate(-1)}
-              className="text-slate-700 hover:text-emerald-600 px-2.5 py-1 rounded-lg text-base sm:text-lg font-black transition-colors cursor-pointer"
+              className="text-slate-700 hover:text-emerald-600 px-3 py-1.5 rounded-lg text-xl sm:text-2xl font-black transition-colors cursor-pointer select-none"
               title="前日へ"
             >
               ◀
             </button>
-            <div className="flex items-center space-x-1.5 text-base sm:text-lg font-black text-slate-900">
-              <Calendar className="h-5 w-5 text-emerald-600 shrink-0" />
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent text-slate-900 font-mono font-black text-sm sm:text-base focus:outline-none cursor-pointer"
-              />
+
+            {/* Date Display and Native Calendar Trigger Area */}
+            <div className="relative flex items-center space-x-1.5 cursor-pointer group py-0.5 px-1.5 rounded-lg hover:bg-emerald-50/70 transition-colors">
+              <span className="font-mono font-black text-lg sm:text-xl md:text-2xl text-slate-900 tracking-wide select-none">
+                {selectedDate ? selectedDate.replace(/-/g, '/') : ''}
+              </span>
               {selectedDayOfWeek && (
-                <span className={`text-sm sm:text-base font-black ${
+                <span className={`text-base sm:text-lg md:text-xl font-black select-none ${
                   selectedDayOfWeek === '日' ? 'text-red-600' :
                   selectedDayOfWeek === '土' ? 'text-blue-600' : 'text-slate-900'
                 }`}>
                   （{selectedDayOfWeek}）
                 </span>
               )}
+              <Calendar className="h-6 w-6 sm:h-7 sm:w-7 text-emerald-600 shrink-0 select-none group-hover:scale-105 transition-transform ml-1" />
+
+              {/* Invisible native date input spanning the entire clickable region */}
+              <input
+                ref={dateInputRef}
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                title="カレンダーを開いて日付を変更"
+              />
             </div>
+
             <button 
               onClick={() => handleMoveDate(1)}
-              className="text-slate-700 hover:text-emerald-600 px-2.5 py-1 rounded-lg text-base sm:text-lg font-black transition-colors cursor-pointer"
+              className="text-slate-700 hover:text-emerald-600 px-3 py-1.5 rounded-lg text-xl sm:text-2xl font-black transition-colors cursor-pointer select-none"
               title="翌日へ"
             >
               ▶
-            </button>
-
-            {/* Quick jump to Today button */}
-            <button
-              onClick={() => setSelectedDate(getTodayDateString())}
-              className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer border shadow-3xs ${
-                selectedDate === getTodayDateString()
-                  ? 'bg-emerald-700 text-white border-emerald-800'
-                  : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border-slate-300'
-              }`}
-              title="本日の日付を表示"
-            >
-              今日
             </button>
           </div>
 
