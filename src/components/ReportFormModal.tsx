@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CareReport, Resident, ShiftRecord } from '../types';
-import { X, Save, Clock, Heart, Coffee, FileText, User, Trash2 } from 'lucide-react';
+import { X, Save, Clock, Heart, Coffee, FileText, User, Trash2, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
 
 interface ReportFormModalProps {
   isOpen?: boolean;
@@ -68,6 +68,12 @@ export default function ReportFormModal({
 
   // Feedback message when saved in inline mode
   const [savedMessage, setSavedMessage] = useState<string>('');
+  const [validationError, setValidationError] = useState<string>('');
+
+  // Selected resident helper object
+  const selectedResidentObj = useMemo(() => {
+    return residents.find((r) => r.id === selectedResId) || null;
+  }, [residents, selectedResId]);
 
   // Searchable select dropdown state
   const [residentSearch, setResidentSearch] = useState<string>('');
@@ -250,9 +256,15 @@ export default function ReportFormModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedResId) {
-      alert("① 対象利用者（入居者）を一覧から選択してください。");
+      setValidationError('① 対象の利用者（入居者）様を一覧から選択してください。');
+      const elem = document.getElementById('resident-select-control');
+      if (elem) {
+        elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        elem.focus();
+      }
       return;
     }
+    setValidationError('');
 
     const recordDate = date || initialDate || getTodayDateString();
 
@@ -323,10 +335,11 @@ export default function ReportFormModal({
       const targetRes = residents.find((r) => r.id === selectedResId);
       const shiftName = shift === 'morning' ? '朝' : shift === 'noon' ? '昼' : '夜';
       const formattedDate = recordDate.replace(/-/g, '/');
-      setSavedMessage(`🎉 ${targetRes?.roomNumber ? `${targetRes.roomNumber}号室: ` : ''}${targetRes?.name || ''} 様 の【${formattedDate} ${shiftName}の記録】を正常に保存・反映しました！`);
+      setSavedMessage(`🎉 ${targetRes?.roomNumber ? `${targetRes.roomNumber}号室: ` : ''}${targetRes?.name || ''} 様 の【${formattedDate} ${shiftName}の記録】を正常に保存・登録しました！ 下の「本日の登録済み記録一覧」および「確認・指示（山本先生）」タブにも即座に反映されています。`);
       
-      // Auto-clear form state completely
+      // Auto-clear form state completely for next input
       setSelectedResId('');
+      setResidentSearch('');
       setReporter('');
       setOtherText('');
       setPoorHealth([]);
@@ -342,7 +355,7 @@ export default function ReportFormModal({
       setPr('');
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      setTimeout(() => setSavedMessage(''), 8000);
+      setTimeout(() => setSavedMessage(''), 9000);
     } else {
       onClose?.();
     }
@@ -450,107 +463,114 @@ export default function ReportFormModal({
       {/* Form Body */}
       <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-5">
         
+        {/* Success Alert Banner */}
         {savedMessage && (
-          <div className="bg-emerald-50 border-2 border-emerald-500 rounded-xl p-4 text-xs font-black text-emerald-800 animate-pulse shadow-md flex items-center space-x-2">
-            <span>✨</span>
-            <span>{savedMessage}</span>
+          <div className="bg-emerald-50 border-2 border-emerald-500 rounded-xl p-4 text-xs sm:text-sm font-black text-emerald-900 shadow-md flex items-center space-x-2.5">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+            <span className="leading-relaxed">{savedMessage}</span>
+          </div>
+        )}
+
+        {/* Validation Error Banner */}
+        {validationError && (
+          <div className="bg-rose-50 border-2 border-rose-500 rounded-xl p-3.5 text-xs sm:text-sm font-black text-rose-900 flex items-center space-x-2.5 shadow-sm">
+            <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0" />
+            <span>{validationError}</span>
           </div>
         )}
 
         {/* Key Selection Fields */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-          <div className="relative" ref={containerRef}>
-            <label className="block text-xs font-bold text-slate-700 mb-1">① 対象利用者（入居者）*</label>
-            <div className="relative">
-              <input
-                type="text"
-                disabled={!!editReport}
-                placeholder="名前・フリガナ・居室で検索..."
-                value={residentSearch}
-                onFocus={() => {
-                  if (!editReport) setIsDropdownOpen(true);
-                }}
-                onChange={(e) => {
-                  setResidentSearch(e.target.value);
-                  setIsDropdownOpen(true);
-                  if (e.target.value === '') {
+          <div className="relative">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-800">
+                ① 対象利用者（入居者）<span className="text-rose-500">*</span>
+              </label>
+              {selectedResId && !editReport && (
+                <button
+                  type="button"
+                  onClick={() => {
                     setSelectedResId('');
-                  } else {
-                    const match = residents.find(r => 
-                      `${r.roomNumber ? `${r.roomNumber}号室: ` : ''}${r.name}` === e.target.value
-                    );
-                    if (match) {
-                      setSelectedResId(match.id);
-                    }
-                  }
-                }}
-                className="w-full rounded-lg border border-slate-300 pl-3 pr-8 py-1.5 text-sm bg-white font-bold text-slate-800 focus:outline-none focus:border-emerald-500 disabled:bg-slate-100 disabled:text-slate-500"
-              />
-              <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
-                <span className="text-[10px]">▼</span>
-              </div>
+                    setResidentSearch('');
+                    setValidationError('');
+                  }}
+                  className="text-[10px] text-slate-500 hover:text-rose-600 font-bold underline cursor-pointer"
+                >
+                  選び直す
+                </button>
+              )}
             </div>
 
-            {isDropdownOpen && !editReport && (
-              <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl py-1 text-sm">
-                {/* Yamamoto Instructions group */}
-                {filteredDropdownResidents.withInstructions.length > 0 && (
-                  <div>
-                    <div className="bg-amber-50 px-3 py-1 text-[10px] font-bold text-amber-800 border-y border-amber-100 flex items-center space-x-1 sticky top-0 z-10">
-                      <span>⚠️ 山本先生の報告指示・要請あり（優先入力）</span>
-                    </div>
-                    {filteredDropdownResidents.withInstructions.map((r) => (
-                      <button
-                        key={r.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedResId(r.id);
-                          setIsDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-1.5 hover:bg-slate-50 transition-colors flex items-center justify-between border-b border-slate-100 ${
-                          selectedResId === r.id ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-700'
-                        }`}
-                      >
-                        <div>
-                          <span className="font-mono bg-amber-100 text-amber-800 px-1 py-0.2 rounded text-[9px] mr-1 font-bold">要報告</span>
-                          <span className="font-bold text-slate-800 text-xs">
-                            {r.roomNumber ? `${r.roomNumber}号室: ` : ''}{r.name} 様
-                          </span>
-                        </div>
-                        {r.kana && <span className="text-[9px] text-slate-400 font-normal">{r.kana}</span>}
-                      </button>
-                    ))}
-                  </div>
+            {/* Quick Search Filter */}
+            {!editReport && (
+              <div className="relative mb-1.5">
+                <input
+                  type="text"
+                  placeholder="🔍 名前・居室で絞り込み..."
+                  value={residentSearch}
+                  onChange={(e) => setResidentSearch(e.target.value)}
+                  className="w-full rounded-md border border-slate-300 pl-2.5 pr-6 py-1 text-xs bg-white text-slate-700 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
+                />
+                {residentSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setResidentSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                  >
+                    ×
+                  </button>
                 )}
+              </div>
+            )}
 
-                {/* Normal resident list */}
-                <div>
-                  <div className="bg-slate-100 px-3 py-1 text-[10px] font-bold text-slate-500 border-y border-slate-200 sticky top-0 z-10">
-                    利用者一覧
-                  </div>
-                  {filteredDropdownResidents.withoutInstructions.length === 0 && filteredDropdownResidents.withInstructions.length === 0 ? (
-                    <div className="px-3 py-2 text-center text-xs text-slate-400">
-                      一致する利用者は見つかりません
-                    </div>
-                  ) : (
-                    filteredDropdownResidents.withoutInstructions.map((r) => (
-                      <button
-                        key={r.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedResId(r.id);
-                          setIsDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-3 py-1.5 hover:bg-slate-50 transition-colors flex items-center justify-between border-b border-slate-100 ${
-                          selectedResId === r.id ? 'bg-emerald-50 text-emerald-800 font-bold' : 'text-slate-700'
-                        }`}
-                      >
-                        <span className="font-bold text-slate-800 text-xs">
-                          {r.roomNumber ? `${r.roomNumber}号室: ` : ''}{r.name} 様
-                        </span>
-                        {r.kana && <span className="text-[9px] text-slate-400 font-normal">{r.kana}</span>}
-                      </button>
-                    ))
+            {/* Standard Robust Select Dropdown */}
+            <select
+              id="resident-select-control"
+              disabled={!!editReport}
+              value={selectedResId}
+              onChange={(e) => {
+                setSelectedResId(e.target.value);
+                setValidationError('');
+              }}
+              className={`w-full rounded-lg border-2 px-2.5 py-1.5 text-xs sm:text-sm font-bold bg-white cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                !selectedResId
+                  ? 'border-amber-400 bg-amber-50/50 text-amber-950 font-bold'
+                  : 'border-emerald-500 text-slate-900'
+              } disabled:bg-slate-100 disabled:text-slate-500`}
+            >
+              <option value="">-- 対象の利用者様を選択してください --</option>
+              {filteredDropdownResidents.withInstructions.length > 0 && (
+                <optgroup label="⚠️ 山本先生の報告指示・要請あり（優先）">
+                  {filteredDropdownResidents.withInstructions.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      【要報告】{r.roomNumber ? `${r.roomNumber}号室: ` : ''}{r.name} 様 ({r.careLevel || '要介護'})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label={`利用者一覧 (${filteredDropdownResidents.withoutInstructions.length}名)`}>
+                {filteredDropdownResidents.withoutInstructions.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.roomNumber ? `${r.roomNumber}号室: ` : ''}{r.name} 様 ({r.careLevel || '要介護'})
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+
+            {/* Selection Status Badge Card */}
+            {selectedResidentObj && (
+              <div className="mt-2 bg-emerald-50 border border-emerald-300 rounded-lg p-2 flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-1.5 flex-wrap">
+                  <span className="bg-emerald-700 text-white font-mono font-black text-[10px] px-1.5 py-0.5 rounded">
+                    {selectedResidentObj.roomNumber ? `${selectedResidentObj.roomNumber}号室` : '居室'}
+                  </span>
+                  <span className="font-black text-emerald-950">
+                    {selectedResidentObj.name} 様
+                  </span>
+                  {selectedResidentObj.careLevel && (
+                    <span className="bg-white border border-emerald-200 text-emerald-800 text-[10px] font-bold px-1 rounded">
+                      {selectedResidentObj.careLevel}
+                    </span>
                   )}
                 </div>
               </div>
@@ -844,23 +864,23 @@ export default function ReportFormModal({
             <button
               type="button"
               onClick={() => {
-                if (window.confirm('入力内容をクリアして初期状態に戻しますか？')) {
-                  setSelectedResId('');
-                  setReporter('');
-                  setOtherText('');
-                  setPoorHealth([]);
-                  setInjuryGait([]);
-                  setElimination([]);
-                  setStaple('');
-                  setSide('');
-                  setLacol('');
-                  setWater('');
-                  setKt('');
-                  setBpSys('');
-                  setBpDia('');
-                  setPr('');
-                  setSavedMessage('');
-                }
+                setSelectedResId('');
+                setResidentSearch('');
+                setReporter('');
+                setOtherText('');
+                setPoorHealth([]);
+                setInjuryGait([]);
+                setElimination([]);
+                setStaple('');
+                setSide('');
+                setLacol('');
+                setWater('');
+                setKt('');
+                setBpSys('');
+                setBpDia('');
+                setPr('');
+                setSavedMessage('');
+                setValidationError('');
               }}
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
             >

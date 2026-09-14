@@ -184,8 +184,24 @@ export default function App() {
         setReports((prev) => {
           // Merge Firestore snapshot with local state so newly recorded local entries are preserved
           const map = new Map<string, CareReport>();
-          prev.forEach((r) => map.set(r.id, r));
+          // 1. Put remote records
           list.forEach((r) => map.set(r.id, r));
+          // 2. Merge local records so optimistic saves are never overwritten
+          prev.forEach((r) => {
+            const existing = map.get(r.id);
+            if (!existing) {
+              map.set(r.id, r);
+            } else {
+              map.set(r.id, {
+                ...existing,
+                ...r,
+                morning: r.morning || existing.morning,
+                noon: r.noon || existing.noon,
+                night: r.night || existing.night,
+                yamamotoInstructions: r.yamamotoInstructions?.text ? r.yamamotoInstructions : existing.yamamotoInstructions,
+              });
+            }
+          });
           const merged = Array.from(map.values());
           try {
             localStorage.setItem('care_reports_list', JSON.stringify(merged));
@@ -1364,6 +1380,150 @@ export default function App() {
               onClose={() => {}}
               onDeleteReport={handleDeleteReport}
             />
+
+            {/* Live Today's Records List in Helper Mode */}
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mt-6">
+              <div className="bg-emerald-800 text-white px-5 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div className="flex items-center space-x-2">
+                  <List className="h-5 w-5 text-emerald-300" />
+                  <h3 className="text-sm sm:text-base font-black tracking-wide">
+                    📋 本日（{formatDateJapanese(selectedDate)}）の登録済み記録一覧
+                  </h3>
+                  <span className="bg-emerald-600 text-white text-xs font-black px-2.5 py-0.5 rounded-full">
+                    {finalDisplayResidents.length}名
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAppMode('view_instruct')}
+                  className="inline-flex items-center space-x-1 text-xs font-black bg-white text-emerald-900 px-3 py-1.5 rounded-lg hover:bg-emerald-50 transition-colors cursor-pointer shadow-sm self-start sm:self-auto"
+                >
+                  <span>確認・指示（山本先生）画面へ</span>
+                  <span>➔</span>
+                </button>
+              </div>
+
+              {finalDisplayResidents.length === 0 ? (
+                <div className="p-8 text-center text-slate-500">
+                  <p className="text-sm font-bold text-slate-700 mb-1">
+                    本日（{formatDateJapanese(selectedDate)}）の記録はまだ登録されていません
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    上のフォームから入力し「この内容で記録保存」を押すと、ここに即座に一覧表示され、山本先生の確認画面にも自動反映されます。
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 p-3 sm:p-5 space-y-3">
+                  {finalDisplayResidents.map((res) => {
+                    const rep = getReportForRes(res);
+                    if (!rep) return null;
+
+                    return (
+                      <div
+                        key={res.id}
+                        className="bg-slate-50/70 hover:bg-emerald-50/40 rounded-xl border border-slate-200 p-4 transition-all flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2.5 flex-wrap gap-y-1 mb-2">
+                            <span className="bg-emerald-800 text-white font-mono font-black text-xs px-2.5 py-0.5 rounded-md">
+                              {res.roomNumber ? `${res.roomNumber}号室` : '居室'}
+                            </span>
+                            <span className="text-base font-black text-slate-900">
+                              {res.name} 様
+                            </span>
+                            {res.careLevel && (
+                              <span className="bg-white border border-slate-200 text-slate-700 text-xs font-bold px-2 py-0.5 rounded">
+                                {res.careLevel}
+                              </span>
+                            )}
+                            {rep.yamamotoInstructions?.text && (
+                              <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-black px-2 py-0.5 rounded-md flex items-center space-x-1">
+                                <span>⚠️ 先生指示あり</span>
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Recorded Shifts Overview */}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                            {/* Morning */}
+                            <div className={`p-2 rounded-lg border ${rep.morning ? 'bg-white border-emerald-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
+                              <div className="font-bold flex items-center justify-between mb-1">
+                                <span className={rep.morning ? 'text-emerald-800' : 'text-slate-400'}>🌅 朝の記録</span>
+                                {rep.morning && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.morning.reporter || '未詳'}</span>}
+                              </div>
+                              {rep.morning ? (
+                                <div className="text-[11px] space-y-0.5 text-slate-700">
+                                  <div>体温: <span className="font-bold">{rep.morning.vitals?.kt ? `${rep.morning.vitals.kt}℃` : '--'}</span> / 血圧: {rep.morning.vitals?.bpSys || '-'}/{rep.morning.vitals?.bpDia || '-'}</div>
+                                  <div>食事: {rep.morning.meals?.staple || '-'}/{rep.morning.meals?.side || '-'}割 / 水分: {rep.morning.meals?.water ? `${rep.morning.meals.water}ml` : '-'}</div>
+                                </div>
+                              ) : (
+                                <span className="text-[10px]">未入力</span>
+                              )}
+                            </div>
+
+                            {/* Noon */}
+                            <div className={`p-2 rounded-lg border ${rep.noon ? 'bg-white border-blue-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
+                              <div className="font-bold flex items-center justify-between mb-1">
+                                <span className={rep.noon ? 'text-blue-800' : 'text-slate-400'}>☀️ 昼の記録</span>
+                                {rep.noon && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.noon.reporter || '未詳'}</span>}
+                              </div>
+                              {rep.noon ? (
+                                <div className="text-[11px] space-y-0.5 text-slate-700">
+                                  <div>体温: <span className="font-bold">{rep.noon.vitals?.kt ? `${rep.noon.vitals.kt}℃` : '--'}</span> / 血圧: {rep.noon.vitals?.bpSys || '-'}/{rep.noon.vitals?.bpDia || '-'}</div>
+                                  <div>食事: {rep.noon.meals?.staple || '-'}/{rep.noon.meals?.side || '-'}割 / 水分: {rep.noon.meals?.water ? `${rep.noon.meals.water}ml` : '-'}</div>
+                                </div>
+                              ) : (
+                                <span className="text-[10px]">未入力</span>
+                              )}
+                            </div>
+
+                            {/* Night */}
+                            <div className={`p-2 rounded-lg border ${rep.night ? 'bg-white border-purple-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
+                              <div className="font-bold flex items-center justify-between mb-1">
+                                <span className={rep.night ? 'text-purple-800' : 'text-slate-400'}>🌙 夜の記録</span>
+                                {rep.night && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.night.reporter || '未詳'}</span>}
+                              </div>
+                              {rep.night ? (
+                                <div className="text-[11px] space-y-0.5 text-slate-700">
+                                  <div>体温: <span className="font-bold">{rep.night.vitals?.kt ? `${rep.night.vitals.kt}℃` : '--'}</span> / 血圧: {rep.night.vitals?.bpSys || '-'}/{rep.night.vitals?.bpDia || '-'}</div>
+                                  <div>食事: {rep.night.meals?.staple || '-'}/{rep.night.meals?.side || '-'}割 / 水分: {rep.night.meals?.water ? `${rep.night.meals.water}ml` : '-'}</div>
+                                </div>
+                              ) : (
+                                <span className="text-[10px]">未入力</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center space-x-2 shrink-0 self-end md:self-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setHelperFormResId(res.id);
+                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                            className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                          >
+                            ✏️ 続けて追加入力・修正
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAppMode('view_instruct');
+                              handleJumpToResidentCard(res.id);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black transition-colors cursor-pointer shadow-sm"
+                          >
+                            👁️ 山本先生確認画面で表示
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
