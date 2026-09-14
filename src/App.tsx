@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Resident, CareReport, ShiftRecord, hasShiftData, hasReportData } from './types';
+import { Resident, CareReport, ShiftRecord, ShiftType, YamamotoInstructions, hasShiftData, hasReportData, getShiftYamamotoInstruction, hasAnyYamamotoInstruction } from './types';
 import { initialResidents } from './data/initialResidents';
 import { initialReports } from './data/mockReports';
 import ReportCard from './components/ReportCard';
@@ -140,7 +140,7 @@ export default function App() {
                 morning: r.morning || existing.morning,
                 noon: r.noon || existing.noon,
                 night: r.night || existing.night,
-                yamamotoInstructions: r.yamamotoInstructions?.text ? r.yamamotoInstructions : existing.yamamotoInstructions,
+                yamamotoInstructions: hasAnyYamamotoInstruction(r) ? r.yamamotoInstructions : existing.yamamotoInstructions,
               });
             }
           });
@@ -377,7 +377,7 @@ export default function App() {
       const hasMorning = hasShiftData(report.morning);
       const hasNoon = hasShiftData(report.noon);
       const hasNight = hasShiftData(report.night);
-      const hasInst = !!(report.yamamotoInstructions?.text && report.yamamotoInstructions.text.trim().length > 0);
+      const hasInst = hasAnyYamamotoInstruction(report);
       return hasMorning || hasNoon || hasNight || hasInst;
     });
   }, [filteredResidents, reportsByResIdMap]);
@@ -387,8 +387,8 @@ export default function App() {
     return [...filteredResidents].sort((a, b) => {
       const repA = getReportForRes(a);
       const repB = getReportForRes(b);
-      const hasInstA = repA?.yamamotoInstructions?.text && repA.yamamotoInstructions.text.trim().length > 0 ? 1 : 0;
-      const hasInstB = repB?.yamamotoInstructions?.text && repB.yamamotoInstructions.text.trim().length > 0 ? 1 : 0;
+      const hasInstA = hasAnyYamamotoInstruction(repA) ? 1 : 0;
+      const hasInstB = hasAnyYamamotoInstruction(repB) ? 1 : 0;
       if (hasInstA !== hasInstB) {
         return hasInstB - hasInstA;
       }
@@ -683,8 +683,14 @@ export default function App() {
     }
   };
 
-  // Save or update Yamamoto instructions directly from card
-  const handleSaveYamamotoInstructions = async (resId: string, text: string, date?: string, reportIdProp?: string | null) => {
+  // Save or update Yamamoto instructions directly from card (per-shift or overall)
+  const handleSaveYamamotoInstructions = async (
+    resId: string,
+    text: string,
+    shiftKey: ShiftType | 'all' = 'all',
+    date?: string,
+    reportIdProp?: string | null
+  ) => {
     const targetDate = date || selectedDate;
     let reportId = reportIdProp;
     let existing: CareReport | null = null;
@@ -705,12 +711,28 @@ export default function App() {
       reportId = `${resId}_${targetDate}`;
     }
 
+    const currentInst: YamamotoInstructions = existing?.yamamotoInstructions || {};
+    let updatedInst: YamamotoInstructions;
+
+    if (shiftKey === 'all') {
+      updatedInst = {
+        ...currentInst,
+        text,
+      };
+    } else {
+      const prevSlot = currentInst[shiftKey] || { text: '', confirmed: false };
+      updatedInst = {
+        ...currentInst,
+        [shiftKey]: {
+          text,
+          confirmed: text.trim() === prevSlot.text.trim() ? prevSlot.confirmed : false,
+        },
+      };
+    }
+
     const newReport: CareReport = existing ? {
       ...existing,
-      yamamotoInstructions: {
-        ...existing.yamamotoInstructions,
-        text,
-      }
+      yamamotoInstructions: updatedInst,
     } : {
       id: reportId,
       residentId: resId,
@@ -718,7 +740,7 @@ export default function App() {
       morning: null,
       noon: null,
       night: null,
-      yamamotoInstructions: { text, confirmed: false },
+      yamamotoInstructions: updatedInst,
       confirmedByDirector: false,
     };
 
@@ -746,8 +768,13 @@ export default function App() {
     }
   };
 
-  // Toggle Yamamoto-sensei's instructions sign-off on a single card
-  const handleToggleYamamotoConfirm = async (resId: string, date?: string, reportIdProp?: string | null) => {
+  // Toggle Yamamoto-sensei's instructions sign-off on a single card (per-shift or overall)
+  const handleToggleYamamotoConfirm = async (
+    resId: string,
+    shiftKey: ShiftType | 'all' = 'all',
+    date?: string,
+    reportIdProp?: string | null
+  ) => {
     const targetDate = date || selectedDate;
     let reportId = reportIdProp;
     let existing: CareReport | null = null;
@@ -768,12 +795,28 @@ export default function App() {
       reportId = `${resId}_${targetDate}`;
     }
 
+    const currentInst: YamamotoInstructions = existing?.yamamotoInstructions || {};
+    let updatedInst: YamamotoInstructions;
+
+    if (shiftKey === 'all') {
+      updatedInst = {
+        ...currentInst,
+        confirmed: !currentInst.confirmed,
+      };
+    } else {
+      const prevSlot = currentInst[shiftKey] || { text: '', confirmed: false };
+      updatedInst = {
+        ...currentInst,
+        [shiftKey]: {
+          ...prevSlot,
+          confirmed: !prevSlot.confirmed,
+        },
+      };
+    }
+
     const toggledReport: CareReport = existing ? {
       ...existing,
-      yamamotoInstructions: {
-        ...existing.yamamotoInstructions,
-        confirmed: !existing.yamamotoInstructions?.confirmed,
-      }
+      yamamotoInstructions: updatedInst,
     } : {
       id: reportId,
       residentId: resId,
@@ -781,7 +824,7 @@ export default function App() {
       morning: null,
       noon: null,
       night: null,
-      yamamotoInstructions: { text: '', confirmed: true },
+      yamamotoInstructions: updatedInst,
       confirmedByDirector: false,
     };
 
@@ -1225,8 +1268,8 @@ export default function App() {
                                     report={rep}
                                     dateLabel={formatDateJapanese(dStr)}
                                     onEditShift={(shift) => handleOpenShiftForm(res.id, shift, dStr)}
-                                    onToggleYamamotoConfirm={(repId) => handleToggleYamamotoConfirm(res.id, dStr, repId)}
-                                    onSaveYamamotoInstructions={(text, repId) => handleSaveYamamotoInstructions(res.id, text, dStr, repId)}
+                                    onToggleYamamotoConfirm={(repId, shiftKey) => handleToggleYamamotoConfirm(res.id, shiftKey, dStr, repId)}
+                                    onSaveYamamotoInstructions={(text, shiftKey, repId) => handleSaveYamamotoInstructions(res.id, text, shiftKey, dStr, repId)}
                                     onDeleteReport={handleDeleteReport}
                                   />
                                 );
@@ -1321,8 +1364,11 @@ export default function App() {
                           kt => kt && parseFloat(kt) >= 37.5
                         );
 
-                        const instText = rep.yamamotoInstructions?.text;
-                        const isInstConfirmed = rep.yamamotoInstructions?.confirmed;
+                        const morningInst = getShiftYamamotoInstruction(rep, 'morning');
+                        const noonInst = getShiftYamamotoInstruction(rep, 'noon');
+                        const nightInst = getShiftYamamotoInstruction(rep, 'night');
+                        const overallInstText = rep.yamamotoInstructions?.text;
+                        const isOverallConfirmed = rep.yamamotoInstructions?.confirmed;
 
                         return (
                           <div
@@ -1383,13 +1429,40 @@ export default function App() {
                                     発熱あり
                                   </span>
                                 )}
-                                {instText && (
-                                  <span className={`text-xs font-black px-2 py-0.5 rounded border ${
-                                    isInstConfirmed 
+                                {morningInst.text && (
+                                  <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
+                                    morningInst.confirmed 
                                       ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
                                       : 'bg-rose-50 text-rose-700 border-rose-300'
                                   }`}>
-                                    指示: {isInstConfirmed ? '確認済' : '未確認'}
+                                    指示[朝]: {morningInst.confirmed ? '確認済' : '未確認'}
+                                  </span>
+                                )}
+                                {noonInst.text && (
+                                  <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
+                                    noonInst.confirmed 
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
+                                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                                  }`}>
+                                    指示[昼]: {noonInst.confirmed ? '確認済' : '未確認'}
+                                  </span>
+                                )}
+                                {nightInst.text && (
+                                  <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
+                                    nightInst.confirmed 
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
+                                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                                  }`}>
+                                    指示[夜]: {nightInst.confirmed ? '確認済' : '未確認'}
+                                  </span>
+                                )}
+                                {overallInstText && (
+                                  <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
+                                    isOverallConfirmed 
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
+                                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                                  }`}>
+                                    指示[全日]: {isOverallConfirmed ? '確認済' : '未確認'}
                                   </span>
                                 )}
                               </div>
@@ -1441,8 +1514,8 @@ export default function App() {
                           resident={res}
                           report={report}
                           onEditShift={(shift) => handleOpenShiftForm(res.id, shift)}
-                          onToggleYamamotoConfirm={(repId) => handleToggleYamamotoConfirm(res.id, undefined, repId)}
-                          onSaveYamamotoInstructions={(text, repId) => handleSaveYamamotoInstructions(res.id, text, undefined, repId)}
+                          onToggleYamamotoConfirm={(repId, shiftKey) => handleToggleYamamotoConfirm(res.id, shiftKey, undefined, repId)}
+                          onSaveYamamotoInstructions={(text, shiftKey, repId) => handleSaveYamamotoInstructions(res.id, text, shiftKey, undefined, repId)}
                           onDeleteReport={handleDeleteReport}
                         />
                       );

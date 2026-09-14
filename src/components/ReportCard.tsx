@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { CareReport, Resident, ShiftRecord, hasShiftData } from '../types';
+import { CareReport, Resident, ShiftRecord, ShiftType, hasShiftData, getShiftYamamotoInstruction } from '../types';
 import { Check, Edit3, Eye, EyeOff } from 'lucide-react';
 
 interface ReportCardProps {
   key?: string;
   resident: Resident;
   report: CareReport | null;
-  onEditShift: (shift: 'morning' | 'noon' | 'night') => void;
-  onToggleYamamotoConfirm: (reportId: string | null) => void;
-  onSaveYamamotoInstructions: (text: string, reportId: string | null) => void;
+  onEditShift: (shift: ShiftType) => void;
+  onToggleYamamotoConfirm: (reportId: string | null, shiftKey: ShiftType | 'all') => void;
+  onSaveYamamotoInstructions: (text: string, shiftKey: ShiftType | 'all', reportId: string | null) => void;
   dateLabel?: string;
   onDeleteReport?: (reportId: string) => void;
 }
@@ -32,32 +32,88 @@ export default function ReportCard({
     night: false,
   });
 
-  // Yamamoto section collapse & edit states
-  const [isYamamotoCollapsed, setIsYamamotoCollapsed] = useState(false);
-  const [isEditingYamamoto, setIsEditingYamamoto] = useState(false);
-  const [editedYamamotoText, setEditedYamamotoText] = useState(report?.yamamotoInstructions?.text || '');
+  // Shift-specific Yamamoto instruction editing states
+  const [editingShifts, setEditingShifts] = useState<{
+    morning: boolean;
+    noon: boolean;
+    night: boolean;
+  }>({
+    morning: false,
+    noon: false,
+    night: false,
+  });
+
+  const [shiftTexts, setShiftTexts] = useState<{
+    morning: string;
+    noon: string;
+    night: string;
+  }>({
+    morning: '',
+    noon: '',
+    night: '',
+  });
+
+  // Sync shift texts when report updates if not actively editing
+  useEffect(() => {
+    setShiftTexts((prev) => ({
+      morning: editingShifts.morning ? prev.morning : getShiftYamamotoInstruction(report, 'morning').text,
+      noon: editingShifts.noon ? prev.noon : getShiftYamamotoInstruction(report, 'noon').text,
+      night: editingShifts.night ? prev.night : getShiftYamamotoInstruction(report, 'night').text,
+    }));
+  }, [
+    report?.yamamotoInstructions?.morning?.text,
+    report?.yamamotoInstructions?.noon?.text,
+    report?.yamamotoInstructions?.night?.text,
+    editingShifts.morning,
+    editingShifts.noon,
+    editingShifts.night,
+  ]);
+
+  // Overall / legacy Yamamoto section collapse & edit states
+  const hasOverallText = !!(report?.yamamotoInstructions?.text && report.yamamotoInstructions.text.trim().length > 0);
+  const [isOverallCollapsed, setIsOverallCollapsed] = useState(false);
+  const [isEditingOverall, setIsEditingOverall] = useState(false);
+  const [editedOverallText, setEditedOverallText] = useState(report?.yamamotoInstructions?.text || '');
 
   useEffect(() => {
-    if (!isEditingYamamoto) {
-      setEditedYamamotoText(report?.yamamotoInstructions?.text || '');
+    if (!isEditingOverall) {
+      setEditedOverallText(report?.yamamotoInstructions?.text || '');
     }
-  }, [report?.yamamotoInstructions?.text, isEditingYamamoto]);
+  }, [report?.yamamotoInstructions?.text, isEditingOverall]);
 
-  const toggleShiftCollapse = (shiftKey: 'morning' | 'noon' | 'night') => {
+  const toggleShiftCollapse = (shiftKey: ShiftType) => {
     setCollapsedShifts((prev) => ({
       ...prev,
       [shiftKey]: !prev[shiftKey],
     }));
   };
 
-  const handleSaveYamamoto = () => {
-    onSaveYamamotoInstructions(editedYamamotoText, report ? report.id : null);
-    setIsEditingYamamoto(false);
+  const handleStartEditingShift = (shiftKey: ShiftType) => {
+    const current = getShiftYamamotoInstruction(report, shiftKey).text;
+    setShiftTexts((prev) => ({ ...prev, [shiftKey]: current }));
+    setEditingShifts((prev) => ({ ...prev, [shiftKey]: true }));
   };
 
-  const handleCancelYamamoto = () => {
-    setEditedYamamotoText(report?.yamamotoInstructions?.text || '');
-    setIsEditingYamamoto(false);
+  const handleCancelEditingShift = (shiftKey: ShiftType) => {
+    const current = getShiftYamamotoInstruction(report, shiftKey).text;
+    setShiftTexts((prev) => ({ ...prev, [shiftKey]: current }));
+    setEditingShifts((prev) => ({ ...prev, [shiftKey]: false }));
+  };
+
+  const handleSaveShiftInstruction = (shiftKey: ShiftType) => {
+    const textToSave = shiftTexts[shiftKey] || '';
+    onSaveYamamotoInstructions(textToSave, shiftKey, report ? report.id : null);
+    setEditingShifts((prev) => ({ ...prev, [shiftKey]: false }));
+  };
+
+  const handleSaveOverall = () => {
+    onSaveYamamotoInstructions(editedOverallText, 'all', report ? report.id : null);
+    setIsEditingOverall(false);
+  };
+
+  const handleCancelOverall = () => {
+    setEditedOverallText(report?.yamamotoInstructions?.text || '');
+    setIsEditingOverall(false);
   };
 
   // Helper to render temperature with custom color rule (red if >= 37.5, blue if < 37.5)
@@ -265,10 +321,115 @@ export default function ReportCard({
             <span className="font-bold">この時間帯の記録はありません</span>
             <button
               onClick={() => onEditShift(shiftKey)}
-              className="mt-2 text-xs text-blue-700 hover:text-blue-900 bg-white border border-blue-300 px-3 py-1 rounded-md font-black shadow-3xs hover:bg-blue-50 transition-colors"
+              className="mt-2 text-xs text-blue-700 hover:text-blue-900 bg-white border border-blue-300 px-3 py-1 rounded-md font-black shadow-3xs hover:bg-blue-50 transition-colors cursor-pointer"
             >
               + {title}の記録を追加
             </button>
+          </div>
+        )}
+
+        {/* Yamamoto Doctor Instruction Box for this Shift (朝・昼・夜 各時間帯別) */}
+        {!isHidden && (
+          <div className="mt-3 pt-2.5 border-t border-slate-300/80">
+            {(() => {
+              const shiftInst = getShiftYamamotoInstruction(report, shiftKey);
+              const isEditingThisShift = editingShifts[shiftKey];
+
+              return (
+                <div className={`rounded-xl border-2 transition-all p-2.5 sm:p-3 space-y-2 ${
+                  shiftInst.text ? 'bg-blue-50/90 border-blue-400 shadow-3xs' : 'bg-white/85 border-blue-200/90'
+                }`}>
+                  {/* Header */}
+                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                    <div className="flex items-center space-x-1.5 text-xs sm:text-sm font-black text-blue-900">
+                      <div className="h-2.5 w-2.5 rounded-full bg-blue-600 shrink-0" />
+                      <span>山本先生指示（{title}）</span>
+                    </div>
+
+                    <div className="flex items-center space-x-1.5">
+                      {/* 追加 / 修正 Button */}
+                      {!isEditingThisShift && (
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditingShift(shiftKey)}
+                          className="text-[11px] text-blue-700 hover:text-blue-900 font-black flex items-center space-x-1 px-2 py-0.5 rounded-md border border-blue-300 bg-white hover:bg-blue-50 transition-colors cursor-pointer shadow-3xs"
+                        >
+                          <Edit3 className="h-3 w-3 text-blue-600" />
+                          <span>{shiftInst.text ? '修正' : '指示入力'}</span>
+                        </button>
+                      )}
+
+                      {/* 未確認 / 確認済 Button */}
+                      <button
+                        type="button"
+                        onClick={() => onToggleYamamotoConfirm(report ? report.id : null, shiftKey)}
+                        className={`flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[11px] font-black transition-all cursor-pointer shadow-3xs ${
+                          shiftInst.confirmed
+                            ? 'bg-emerald-600 text-white border border-emerald-500 shadow-xs'
+                            : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300'
+                        }`}
+                        title={`クリックで${title}の指示の確認状態を切り替え`}
+                      >
+                        {shiftInst.confirmed ? (
+                          <>
+                            <Check className="h-3 w-3" />
+                            <span>確認済</span>
+                          </>
+                        ) : (
+                          <span>未確認</span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Content / Editor */}
+                  {isEditingThisShift ? (
+                    <div className="space-y-2 pt-1">
+                      <textarea
+                        value={shiftTexts[shiftKey] || ''}
+                        onChange={(e) => setShiftTexts((prev) => ({ ...prev, [shiftKey]: e.target.value }))}
+                        placeholder={`山本先生からの${title}の指示内容をここに入力...`}
+                        rows={3}
+                        className="w-full p-2 border-2 border-blue-400 rounded-lg text-xs sm:text-sm font-bold focus:outline-none focus:border-blue-700 text-slate-900 leading-relaxed bg-white shadow-inner"
+                        autoFocus
+                      />
+                      <div className="flex justify-end space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleCancelEditingShift(shiftKey)}
+                          className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-300 transition-colors cursor-pointer"
+                        >
+                          キャンセル
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSaveShiftInstruction(shiftKey)}
+                          className="px-3 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-xs transition-colors cursor-pointer"
+                        >
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      {shiftInst.text ? (
+                        <div className="bg-white p-2 sm:p-2.5 rounded-lg border border-blue-200 shadow-3xs">
+                          <p className="text-xs sm:text-sm leading-relaxed text-slate-900 font-bold whitespace-pre-wrap break-words">
+                            {shiftInst.text}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="bg-white/60 p-2 rounded-lg border border-dashed border-blue-200/90 text-center">
+                          <p className="text-[11px] text-slate-400 font-bold italic">
+                            {title}の指示は未記入です（「指示入力」から登録）
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -332,111 +493,108 @@ export default function ReportCard({
         )}
       </div>
 
-          {/* 3. Yamamoto Doctor Instruction Area */}
-          {isYamamotoCollapsed ? (
-            <div className="px-3 sm:px-4 pb-3 sm:pb-4 mt-auto">
-              <button
-                onClick={() => setIsYamamotoCollapsed(false)}
-                className="w-full bg-blue-50 border-2 border-blue-200 text-blue-800 hover:bg-blue-100 text-xs sm:text-sm font-black py-2.5 rounded-xl flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-3xs"
-              >
-                <Eye className="h-4 w-4 text-blue-600" />
-                <span>山本先生指示欄を表示（{report?.yamamotoInstructions?.text ? '記載あり' : '未記入'}）</span>
-              </button>
-            </div>
+      {/* 3. Overall / General Yamamoto Doctor Instruction Area (Shown when general/legacy instruction exists) */}
+      {hasOverallText && (
+        <div className="px-3 sm:px-4 pb-3 sm:pb-4 mt-auto">
+          {isOverallCollapsed ? (
+            <button
+              type="button"
+              onClick={() => setIsOverallCollapsed(false)}
+              className="w-full bg-amber-50 border-2 border-amber-200 text-amber-900 hover:bg-amber-100 text-xs sm:text-sm font-black py-2.5 rounded-xl flex items-center justify-center space-x-2 transition-all cursor-pointer shadow-3xs"
+            >
+              <Eye className="h-4 w-4 text-amber-700" />
+              <span>全日・共通指示を表示（記載あり）</span>
+            </button>
           ) : (
-            <div className="px-3 sm:px-4 pb-3 sm:pb-4 mt-auto">
-              <div className="bg-white border-2 border-blue-600 rounded-xl p-3.5 sm:p-4 shadow-sm space-y-3 flex flex-col">
-                <div className="flex items-center justify-between border-b border-blue-100 pb-2.5 flex-wrap gap-2">
-                  <div className="flex items-center space-x-2 text-sm font-black text-blue-900">
-                    <div className="h-3 w-3 rounded-full bg-blue-600" />
-                    <span>山本先生指示欄</span>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2">
-                    {/* Collapse Toggle Button */}
+            <div className="bg-amber-50/70 border-2 border-amber-300 rounded-xl p-3 sm:p-3.5 shadow-xs space-y-2.5 flex flex-col">
+              <div className="flex items-center justify-between border-b border-amber-200 pb-2 flex-wrap gap-2">
+                <div className="flex items-center space-x-2 text-xs sm:text-sm font-black text-amber-950">
+                  <span className="bg-amber-200 text-amber-900 px-2 py-0.5 rounded text-xs font-black">全日共通</span>
+                  <span>山本先生 共通指示</span>
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsOverallCollapsed(true)}
+                    className="text-xs text-slate-600 hover:text-slate-900 font-bold flex items-center space-x-1 px-2.5 py-1 rounded-md border border-slate-300 bg-white hover:bg-slate-50 transition-colors cursor-pointer shadow-3xs"
+                    title="共通指示欄を非表示にする"
+                  >
+                    <EyeOff className="h-3.5 w-3.5 text-slate-500" />
+                    <span>非表示</span>
+                  </button>
+
+                  {!isEditingOverall && (
                     <button
-                      onClick={() => setIsYamamotoCollapsed(true)}
-                      className="text-xs text-slate-600 hover:text-slate-900 font-bold flex items-center space-x-1 px-2.5 py-1 rounded-md border border-slate-300 hover:bg-slate-50 transition-colors cursor-pointer"
-                      title="指示欄を非表示にする"
+                      type="button"
+                      onClick={() => setIsEditingOverall(true)}
+                      className="text-xs text-amber-900 hover:text-amber-950 font-black flex items-center space-x-1 px-2.5 py-1 rounded-md border border-amber-400 bg-white hover:bg-amber-50 transition-colors cursor-pointer shadow-3xs"
                     >
-                      <EyeOff className="h-3.5 w-3.5 text-slate-500" />
-                      <span>非表示</span>
+                      <Edit3 className="h-3.5 w-3.5 text-amber-700" />
+                      <span>編集</span>
                     </button>
+                  )}
 
-                    {/* Edit Button */}
-                    {!isEditingYamamoto && (
-                      <button
-                        onClick={() => setIsEditingYamamoto(true)}
-                        className="text-xs text-blue-700 hover:text-blue-900 font-black flex items-center space-x-1 px-2.5 py-1 rounded-md border border-blue-300 hover:bg-blue-50 transition-colors cursor-pointer"
-                      >
-                        <Edit3 className="h-3.5 w-3.5 text-blue-600" />
-                        <span>{report?.yamamotoInstructions?.text ? '編集' : '追加'}</span>
-                      </button>
+                  <button
+                    type="button"
+                    onClick={() => onToggleYamamotoConfirm(report ? report.id : null, 'all')}
+                    className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-black transition-all cursor-pointer shadow-3xs ${
+                      report?.yamamotoInstructions?.confirmed
+                        ? 'bg-emerald-600 text-white border border-emerald-500'
+                        : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300'
+                    }`}
+                    title="クリックで全日共通指示の確認状態を切り替え"
+                  >
+                    {report?.yamamotoInstructions?.confirmed ? (
+                      <>
+                        <Check className="h-3.5 w-3.5" />
+                        <span>確認済</span>
+                      </>
+                    ) : (
+                      <span>未確認</span>
                     )}
+                  </button>
+                </div>
+              </div>
 
-                    {/* Confirm Toggle Button */}
+              {/* Body Content / Form */}
+              {isEditingOverall ? (
+                <div className="space-y-2">
+                  <textarea
+                    value={editedOverallText}
+                    onChange={(e) => setEditedOverallText(e.target.value)}
+                    placeholder="山本先生からの全日共通の指示内容を入力..."
+                    rows={2}
+                    className="w-full p-2.5 border-2 border-amber-400 rounded-lg text-xs sm:text-sm font-bold focus:outline-none focus:border-amber-700 text-slate-900 leading-relaxed bg-white"
+                  />
+                  <div className="flex justify-end space-x-2">
                     <button
-                      onClick={() => onToggleYamamotoConfirm(report ? report.id : null)}
-                      className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-black transition-all cursor-pointer ${
-                        report?.yamamotoInstructions?.confirmed
-                          ? 'bg-emerald-600 text-white border border-emerald-500 shadow-3xs'
-                          : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300'
-                      }`}
-                      title="クリックで確認状態を切り替え"
+                      type="button"
+                      onClick={handleCancelOverall}
+                      className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-300 transition-colors cursor-pointer"
                     >
-                      {report?.yamamotoInstructions?.confirmed ? (
-                        <>
-                          <Check className="h-3.5 w-3.5" />
-                          <span>確認済</span>
-                        </>
-                      ) : (
-                        <span>未確認</span>
-                      )}
+                      キャンセル
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveOverall}
+                      className="px-3.5 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-black text-xs shadow-xs transition-colors cursor-pointer"
+                    >
+                      保存
                     </button>
                   </div>
                 </div>
-
-                {/* Body Content / Form */}
-                {isEditingYamamoto ? (
-                  <div className="space-y-2.5">
-                    <textarea
-                      value={editedYamamotoText}
-                      onChange={(e) => setEditedYamamotoText(e.target.value)}
-                      placeholder="山本先生からの指示内容をここに入力してください..."
-                      rows={3}
-                      className="w-full p-2.5 border-2 border-blue-400 rounded-lg text-sm font-bold focus:outline-none focus:border-blue-700 text-slate-900 leading-relaxed"
-                    />
-                    <div className="flex justify-end space-x-2">
-                      <button
-                        onClick={handleCancelYamamoto}
-                        className="px-3.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-300 transition-colors cursor-pointer"
-                      >
-                        キャンセル
-                      </button>
-                      <button
-                        onClick={handleSaveYamamoto}
-                        className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-xs transition-colors cursor-pointer"
-                      >
-                        保存
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-slate-50/80 p-3 rounded-lg border border-slate-200/80">
-                    {report?.yamamotoInstructions?.text ? (
-                      <p className="text-sm sm:text-base leading-relaxed text-slate-900 font-bold whitespace-pre-wrap break-words">
-                        {report.yamamotoInstructions.text}
-                      </p>
-                    ) : (
-                      <p className="text-xs sm:text-sm text-slate-400 font-bold italic py-1">
-                        指示はまだ入力されていません。「追加」ボタンから入力できます。
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
+              ) : (
+                <div className="bg-white p-2.5 rounded-lg border border-amber-200 shadow-3xs">
+                  <p className="text-xs sm:text-sm leading-relaxed text-slate-900 font-bold whitespace-pre-wrap break-words">
+                    {report?.yamamotoInstructions?.text}
+                  </p>
+                </div>
+              )}
             </div>
           )}
+        </div>
+      )}
     </div>
   );
 }

@@ -21,6 +21,21 @@ export interface ShiftRecord {
   };
 }
 
+export type ShiftType = 'morning' | 'noon' | 'night';
+
+export interface YamamotoInstructionSlot {
+  text: string;
+  confirmed: boolean;
+}
+
+export interface YamamotoInstructions {
+  text?: string;
+  confirmed?: boolean;
+  morning?: YamamotoInstructionSlot;
+  noon?: YamamotoInstructionSlot;
+  night?: YamamotoInstructionSlot;
+}
+
 export interface CareReport {
   id: string; // residentId_YYYY-MM-DD
   residentId: string;
@@ -28,10 +43,7 @@ export interface CareReport {
   morning: ShiftRecord | null;
   noon: ShiftRecord | null;
   night: ShiftRecord | null;
-  yamamotoInstructions: {
-    text: string;
-    confirmed: boolean;
-  };
+  yamamotoInstructions?: YamamotoInstructions;
   confirmedByDirector: boolean; // 施設長確認
 }
 
@@ -81,6 +93,40 @@ export function hasShiftData(shift: ShiftRecord | null | undefined): boolean {
 }
 
 /**
+ * Get the Yamamoto instruction slot for a specific shift ('morning' | 'noon' | 'night').
+ */
+export function getShiftYamamotoInstruction(
+  report: CareReport | null | undefined,
+  shift: ShiftType
+): YamamotoInstructionSlot {
+  if (!report || !report.yamamotoInstructions) {
+    return { text: '', confirmed: false };
+  }
+  const inst = report.yamamotoInstructions;
+  const shiftSlot = inst[shift];
+  if (shiftSlot && typeof shiftSlot === 'object') {
+    return {
+      text: shiftSlot.text || '',
+      confirmed: !!shiftSlot.confirmed,
+    };
+  }
+  return { text: '', confirmed: false };
+}
+
+/**
+ * Checks if a CareReport has any Yamamoto instruction in morning, noon, night, or overall.
+ */
+export function hasAnyYamamotoInstruction(report: CareReport | null | undefined): boolean {
+  if (!report || !report.yamamotoInstructions) return false;
+  const inst = report.yamamotoInstructions;
+  if (inst.text && inst.text.trim().length > 0) return true;
+  if (inst.morning?.text && inst.morning.text.trim().length > 0) return true;
+  if (inst.noon?.text && inst.noon.text.trim().length > 0) return true;
+  if (inst.night?.text && inst.night.text.trim().length > 0) return true;
+  return false;
+}
+
+/**
  * Checks if a CareReport contains at least one recorded shift or doctor instructions.
  */
 export function hasReportData(report: CareReport | null | undefined): boolean {
@@ -88,6 +134,6 @@ export function hasReportData(report: CareReport | null | undefined): boolean {
   if (hasShiftData(report.morning)) return true;
   if (hasShiftData(report.noon)) return true;
   if (hasShiftData(report.night)) return true;
-  if (report.yamamotoInstructions?.text && report.yamamotoInstructions.text.trim().length > 0) return true;
+  if (hasAnyYamamotoInstruction(report)) return true;
   return false;
 }
