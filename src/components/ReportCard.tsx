@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CareReport, Resident, ShiftRecord } from '../types';
+import { CareReport, Resident, ShiftRecord, hasShiftData } from '../types';
 import { Check, Edit3, Eye, EyeOff } from 'lucide-react';
 
 interface ReportCardProps {
@@ -132,7 +132,8 @@ export default function ReportCard({
     borderClass: string,
     accentBadgeClass: string
   ) => {
-    const shiftData = report ? report[shiftKey] : null;
+    const rawShiftData = report ? report[shiftKey] : null;
+    const shiftData = hasShiftData(rawShiftData) ? rawShiftData : null;
     const isHidden = collapsedShifts[shiftKey];
 
     return (

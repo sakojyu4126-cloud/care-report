@@ -1,7 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
+    // Only allow operations on residents and reports collections to avoid rogue scans
+    match /residents/{residentId} {
+      allow read, write: if true;
+    }
+    match /reports/{reportId} {
       allow read, write: if true;
     }
   }

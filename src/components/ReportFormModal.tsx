@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { CareReport, Resident, ShiftRecord } from '../types';
+import { CareReport, Resident, ShiftRecord, hasShiftData } from '../types';
 import { X, Save, Clock, Heart, Coffee, FileText, User, Trash2, AlertTriangle, CheckCircle2, Search } from 'lucide-react';
 
 interface ReportFormModalProps {
@@ -127,7 +127,7 @@ export default function ReportFormModal({
   // Load shift data if switching shift or during initialization
   const loadShiftData = (report: CareReport, targetShift: 'morning' | 'noon' | 'night') => {
     const sData = report[targetShift];
-    if (sData) {
+    if (sData && hasShiftData(sData)) {
       setReporter(sData.reporter || '');
       setPoorHealth(sData.categories?.poorHealth || []);
       setInjuryGait(sData.categories?.injuryGait || []);
@@ -156,6 +156,60 @@ export default function ReportFormModal({
       setBpSys('');
       setBpDia('');
       setPr('');
+    }
+  };
+
+  // Clear current shift data and set to not-input (未入力) state
+  const handleClearCurrentShift = () => {
+    const recordDate = date || initialDate || getTodayDateString();
+    const existing = reports.find((r) => r.residentId === selectedResId && r.date === recordDate);
+    const shiftName = shift === 'morning' ? '朝' : shift === 'noon' ? '昼' : '夜';
+
+    // Clear form inputs
+    setReporter('');
+    setOtherText('');
+    setPoorHealth([]);
+    setInjuryGait([]);
+    setElimination([]);
+    setStaple('');
+    setSide('');
+    setLacol('');
+    setWater('');
+    setKt('');
+    setBpSys('');
+    setBpDia('');
+    setPr('');
+    setValidationError('');
+
+    if (existing) {
+      const newMorning = shift === 'morning' ? null : (hasShiftData(existing.morning) ? existing.morning : null);
+      const newNoon = shift === 'noon' ? null : (hasShiftData(existing.noon) ? existing.noon : null);
+      const newNight = shift === 'night' ? null : (hasShiftData(existing.night) ? existing.night : null);
+      const instText = existing.yamamotoInstructions?.text;
+
+      const hasRemaining = 
+        hasShiftData(newMorning) ||
+        hasShiftData(newNoon) ||
+        hasShiftData(newNight) ||
+        !!(instText && instText.trim().length > 0);
+
+      if (!hasRemaining && onDeleteReport) {
+        onDeleteReport(existing.id);
+      } else {
+        const updated: CareReport = {
+          ...existing,
+          morning: newMorning,
+          noon: newNoon,
+          night: newNight,
+        };
+        onSaveReport(updated);
+      }
+
+      if (isInline) {
+        setSavedMessage(`【${shiftName}の記録】をクリアし、「未入力」状態に戻しました。`);
+      } else if (onClose) {
+        onClose();
+      }
     }
   };
 
@@ -253,6 +307,17 @@ export default function ReportFormModal({
   };
 
   // Handle Form Submission
+  // Check recorded shifts for selected resident and date
+  const currentResidentReport = useMemo(() => {
+    const recordDate = date || initialDate || getTodayDateString();
+    return reports.find((r) => r.residentId === selectedResId && r.date === recordDate);
+  }, [reports, selectedResId, date, initialDate]);
+
+  const morningRecorded = hasShiftData(currentResidentReport?.morning);
+  const noonRecorded = hasShiftData(currentResidentReport?.noon);
+  const nightRecorded = hasShiftData(currentResidentReport?.night);
+  const currentShiftHasData = hasShiftData(currentResidentReport?.[shift]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedResId) {
@@ -271,8 +336,8 @@ export default function ReportFormModal({
     // 1. Check if we already have a report for this resident + date
     const existingIndex = reports.findIndex((r) => r.residentId === selectedResId && r.date === recordDate);
     
-    // Create the updated shift record
-    const shiftRecord: ShiftRecord = {
+    // Check if the current shift input has any actual recorded data
+    const rawShiftRecord: ShiftRecord = {
       reporter: reporter.trim(),
       categories: {
         poorHealth,
@@ -294,25 +359,72 @@ export default function ReportFormModal({
       },
     };
 
+    const isShiftRecorded = hasShiftData(rawShiftRecord);
+    const shiftRecord: ShiftRecord | null = isShiftRecorded ? rawShiftRecord : null;
+
     let updatedReport: CareReport;
 
     if (existingIndex >= 0) {
       // Clone existing and overwrite shift & instructions
       const existing = reports[existingIndex];
+      const inst = isInline
+        ? (existing.yamamotoInstructions || { text: '', confirmed: false })
+        : {
+            text: instructionsText.trim(),
+            confirmed: instructionsText.trim() === (existing.yamamotoInstructions?.text || '')
+              ? (existing.yamamotoInstructions?.confirmed ?? false)
+              : false, // reset confirm if text edited
+          };
+
+      const newMorning = shift === 'morning' ? shiftRecord : (hasShiftData(existing.morning) ? existing.morning : null);
+      const newNoon = shift === 'noon' ? shiftRecord : (hasShiftData(existing.noon) ? existing.noon : null);
+      const newNight = shift === 'night' ? shiftRecord : (hasShiftData(existing.night) ? existing.night : null);
+
+      const hasRemaining = 
+        hasShiftData(newMorning) ||
+        hasShiftData(newNoon) ||
+        hasShiftData(newNight) ||
+        !!(inst.text && inst.text.trim().length > 0);
+
+      if (!hasRemaining && onDeleteReport) {
+        onDeleteReport(existing.id);
+        if (isInline) {
+          setSavedMessage(`入力内容がクリアされたため、記録を「未入力」状態に戻しました。`);
+          setSelectedResId('');
+          setResidentSearch('');
+          setReporter('');
+          setOtherText('');
+          setPoorHealth([]);
+          setInjuryGait([]);
+          setElimination([]);
+          setStaple('');
+          setSide('');
+          setLacol('');
+          setWater('');
+          setKt('');
+          setBpSys('');
+          setBpDia('');
+          setPr('');
+        } else if (onClose) {
+          onClose();
+        }
+        return;
+      }
+
       updatedReport = {
         ...existing,
         date: recordDate,
-        [shift]: shiftRecord,
-        yamamotoInstructions: isInline
-          ? (existing.yamamotoInstructions || { text: '', confirmed: false })
-          : {
-              text: instructionsText.trim(),
-              confirmed: instructionsText.trim() === (existing.yamamotoInstructions?.text || '')
-                ? (existing.yamamotoInstructions?.confirmed ?? false)
-                : false, // reset confirm if text edited
-            },
+        morning: newMorning,
+        noon: newNoon,
+        night: newNight,
+        yamamotoInstructions: inst,
       };
     } else {
+      if (!isShiftRecorded && !instructionsText.trim()) {
+        setValidationError('内容が入力されていません。体温・血圧・食事・状況チェック・特記等のいずれかを入力してください。（内容がない場合は未入力となります）');
+        return;
+      }
+
       // Create completely new report
       updatedReport = {
         id: `${selectedResId}_${recordDate}`,
@@ -481,7 +593,8 @@ export default function ReportFormModal({
 
         {/* Key Selection Fields */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-          <div className="relative">
+          {/* ① 対象利用者（入居者）予測変換・オートコンプリート検索選択 */}
+          <div className="relative" ref={containerRef}>
             <div className="flex items-center justify-between mb-1">
               <label className="block text-xs font-bold text-slate-800">
                 ① 対象利用者（入居者）<span className="text-rose-500">*</span>
@@ -493,6 +606,7 @@ export default function ReportFormModal({
                     setSelectedResId('');
                     setResidentSearch('');
                     setValidationError('');
+                    setIsDropdownOpen(true);
                   }}
                   className="text-[10px] text-slate-500 hover:text-rose-600 font-bold underline cursor-pointer"
                 >
@@ -501,61 +615,155 @@ export default function ReportFormModal({
               )}
             </div>
 
-            {/* Quick Search Filter */}
-            {!editReport && (
-              <div className="relative mb-1.5">
-                <input
-                  type="text"
-                  placeholder="🔍 名前・居室で絞り込み..."
-                  value={residentSearch}
-                  onChange={(e) => setResidentSearch(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 pl-2.5 pr-6 py-1 text-xs bg-white text-slate-700 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
-                />
-                {residentSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setResidentSearch('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
-                  >
-                    ×
-                  </button>
+            {/* Predictive Autocomplete Search Input */}
+            <div className="relative">
+              <input
+                id="resident-search-input"
+                type="text"
+                disabled={!!editReport}
+                placeholder="名前（例: 中島）や居室番号で検索..."
+                value={residentSearch}
+                onChange={(e) => {
+                  setResidentSearch(e.target.value);
+                  setIsDropdownOpen(true);
+                  if (selectedResId) {
+                    setSelectedResId('');
+                  }
+                }}
+                onFocus={() => {
+                  if (!editReport) setIsDropdownOpen(true);
+                }}
+                className={`w-full rounded-lg border-2 px-3 py-2 text-xs sm:text-sm font-bold bg-white transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                  !selectedResId
+                    ? 'border-amber-400 bg-amber-50/40 text-slate-900 placeholder:text-amber-700/60 font-bold'
+                    : 'border-emerald-500 bg-emerald-50/20 text-slate-900'
+                } disabled:bg-slate-100 disabled:text-slate-500`}
+                autoComplete="off"
+              />
+
+              {residentSearch && !editReport && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResidentSearch('');
+                    setSelectedResId('');
+                    setIsDropdownOpen(true);
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 font-bold text-sm w-5 h-5 flex items-center justify-center rounded-full hover:bg-slate-100 cursor-pointer"
+                  title="クリア"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
+            {/* Predictive Floating Dropdown List */}
+            {isDropdownOpen && !editReport && (
+              <div className="absolute z-50 left-0 right-0 mt-1 bg-white rounded-xl shadow-2xl border border-slate-200 max-h-64 overflow-y-auto divide-y divide-slate-100 animate-in fade-in zoom-in-95 duration-100">
+                {filteredDropdownResidents.withInstructions.length === 0 &&
+                filteredDropdownResidents.withoutInstructions.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-slate-500">
+                    該当する利用者様が見つかりません（「{residentSearch}」）
+                  </div>
+                ) : (
+                  <>
+                    {/* Priority: Instructions from Yamamoto Doctor */}
+                    {filteredDropdownResidents.withInstructions.length > 0 && (
+                      <div className="bg-amber-50/60">
+                        <div className="px-3 py-1.5 text-[11px] font-bold text-amber-800 bg-amber-100/70 sticky top-0 flex items-center gap-1 border-b border-amber-200">
+                          <span>⚠️</span>
+                          <span>山本先生の報告指示・要請あり（優先）</span>
+                        </div>
+                        {filteredDropdownResidents.withInstructions.map((r) => (
+                          <div
+                            key={r.id}
+                            onClick={() => {
+                              setSelectedResId(r.id);
+                              setResidentSearch(
+                                `${r.roomNumber ? `${r.roomNumber}号室: ` : ''}${r.name}`
+                              );
+                              setIsDropdownOpen(false);
+                              setValidationError('');
+                            }}
+                            className={`px-3 py-2 cursor-pointer hover:bg-amber-100 transition-colors flex items-center justify-between text-xs sm:text-sm ${
+                              selectedResId === r.id ? 'bg-emerald-50 font-bold' : ''
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <span className="bg-amber-600 text-white font-mono font-bold text-[10px] px-1.5 py-0.5 rounded">
+                                {r.roomNumber ? `${r.roomNumber}号室` : '居室'}
+                              </span>
+                              <span className="font-bold text-slate-900">
+                                {r.name} 様
+                              </span>
+                              {r.kana && (
+                                <span className="text-[11px] text-slate-400">
+                                  ({r.kana})
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] bg-amber-200/70 text-amber-900 font-bold px-1.5 py-0.5 rounded">
+                              要報告
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Standard Residents List */}
+                    {filteredDropdownResidents.withoutInstructions.length > 0 && (
+                      <div>
+                        <div className="px-3 py-1.5 text-[11px] font-bold text-slate-600 bg-slate-100 sticky top-0 flex items-center justify-between border-b border-slate-200">
+                          <span>
+                            {residentSearch
+                              ? `検索結果 (${filteredDropdownResidents.withoutInstructions.length}名)`
+                              : `登録利用者一覧 (${filteredDropdownResidents.withoutInstructions.length}名)`}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-normal">
+                            クリックして選択
+                          </span>
+                        </div>
+                        {filteredDropdownResidents.withoutInstructions.map((r) => (
+                          <div
+                            key={r.id}
+                            onClick={() => {
+                              setSelectedResId(r.id);
+                              setResidentSearch(
+                                `${r.roomNumber ? `${r.roomNumber}号室: ` : ''}${r.name}`
+                              );
+                              setIsDropdownOpen(false);
+                              setValidationError('');
+                            }}
+                            className={`px-3 py-2 cursor-pointer hover:bg-emerald-50 hover:text-emerald-950 transition-colors flex items-center justify-between text-xs sm:text-sm ${
+                              selectedResId === r.id ? 'bg-emerald-100/70 font-bold' : ''
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <span className="bg-slate-700 text-white font-mono font-bold text-[10px] px-1.5 py-0.5 rounded">
+                                {r.roomNumber ? `${r.roomNumber}号室` : '居室'}
+                              </span>
+                              <span className="font-bold text-slate-900">
+                                {r.name} 様
+                              </span>
+                              {r.kana && (
+                                <span className="text-[11px] text-slate-400">
+                                  ({r.kana})
+                                </span>
+                              )}
+                            </div>
+                            {r.careLevel && (
+                              <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">
+                                {r.careLevel}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
-
-            {/* Standard Robust Select Dropdown */}
-            <select
-              id="resident-select-control"
-              disabled={!!editReport}
-              value={selectedResId}
-              onChange={(e) => {
-                setSelectedResId(e.target.value);
-                setValidationError('');
-              }}
-              className={`w-full rounded-lg border-2 px-2.5 py-1.5 text-xs sm:text-sm font-bold bg-white cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
-                !selectedResId
-                  ? 'border-amber-400 bg-amber-50/50 text-amber-950 font-bold'
-                  : 'border-emerald-500 text-slate-900'
-              } disabled:bg-slate-100 disabled:text-slate-500`}
-            >
-              <option value="">-- 対象の利用者様を選択してください --</option>
-              {filteredDropdownResidents.withInstructions.length > 0 && (
-                <optgroup label="⚠️ 山本先生の報告指示・要請あり（優先）">
-                  {filteredDropdownResidents.withInstructions.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      【要報告】{r.roomNumber ? `${r.roomNumber}号室: ` : ''}{r.name} 様 ({r.careLevel || '要介護'})
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              <optgroup label={`利用者一覧 (${filteredDropdownResidents.withoutInstructions.length}名)`}>
-                {filteredDropdownResidents.withoutInstructions.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.roomNumber ? `${r.roomNumber}号室: ` : ''}{r.name} 様 ({r.careLevel || '要介護'})
-                  </option>
-                ))}
-              </optgroup>
-            </select>
 
             {/* Selection Status Badge Card */}
             {selectedResidentObj && (
@@ -595,29 +803,44 @@ export default function ReportFormModal({
               <button
                 type="button"
                 onClick={() => setShift('morning')}
-                className={`flex-1 text-center py-1 rounded text-xs font-bold transition-all ${
+                className={`flex-1 text-center py-1 rounded text-xs font-bold transition-all flex items-center justify-center space-x-1 ${
                   shift === 'morning' ? 'bg-amber-100 text-amber-800 shadow-xs border border-amber-300' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                朝
+                <span>朝</span>
+                {morningRecorded ? (
+                  <span className="text-[10px] bg-amber-200/90 text-amber-900 px-1 rounded font-black">済</span>
+                ) : (
+                  <span className="text-[10px] text-slate-400 font-normal">未</span>
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => setShift('noon')}
-                className={`flex-1 text-center py-1 rounded text-xs font-bold transition-all ${
+                className={`flex-1 text-center py-1 rounded text-xs font-bold transition-all flex items-center justify-center space-x-1 ${
                   shift === 'noon' ? 'bg-orange-100 text-orange-800 shadow-xs border border-orange-300' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                昼
+                <span>昼</span>
+                {noonRecorded ? (
+                  <span className="text-[10px] bg-orange-200/90 text-orange-900 px-1 rounded font-black">済</span>
+                ) : (
+                  <span className="text-[10px] text-slate-400 font-normal">未</span>
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => setShift('night')}
-                className={`flex-1 text-center py-1 rounded text-xs font-bold transition-all ${
+                className={`flex-1 text-center py-1 rounded text-xs font-bold transition-all flex items-center justify-center space-x-1 ${
                   shift === 'night' ? 'bg-sky-100 text-sky-800 shadow-xs border border-sky-300' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                夜
+                <span>夜</span>
+                {nightRecorded ? (
+                  <span className="text-[10px] bg-sky-200/90 text-sky-900 px-1 rounded font-black">済</span>
+                ) : (
+                  <span className="text-[10px] text-slate-400 font-normal">未</span>
+                )}
               </button>
             </div>
           </div>
@@ -893,6 +1116,19 @@ export default function ReportFormModal({
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
             >
               キャンセル
+            </button>
+          )}
+
+          {/* Shift Clear/Reset Button */}
+          {selectedResId && currentShiftHasData && (
+            <button
+              type="button"
+              onClick={handleClearCurrentShift}
+              className="flex items-center space-x-1 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 px-3.5 py-2 text-xs font-bold transition-colors cursor-pointer shadow-3xs"
+              title={`この利用者の【${shift === 'morning' ? '朝' : shift === 'noon' ? '昼' : '夜'}】の記録のみを未入力に戻します`}
+            >
+              <Trash2 className="h-3.5 w-3.5 text-amber-600" />
+              <span>{shift === 'morning' ? '朝' : shift === 'noon' ? '昼' : '夜'}の記録を未入力に戻す</span>
             </button>
           )}
 

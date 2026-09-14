@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Resident, CareReport } from './types';
+import { Resident, CareReport, ShiftRecord, hasShiftData, hasReportData } from './types';
 import { initialResidents } from './data/initialResidents';
 import { initialReports } from './data/mockReports';
 import ReportCard from './components/ReportCard';
@@ -29,8 +29,9 @@ import {
   Download,
   Upload
 } from 'lucide-react';
-import { collection, onSnapshot, setDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from './lib/firebase';
+import { safeSetDocWithDebounce, safeDeleteDoc, batchWriteDocs } from './lib/firestoreQueue';
 
 const getTodayDateString = (): string => {
   const d = new Date();
@@ -73,94 +74,14 @@ export default function App() {
   });
 
   // Real-time synchronization with Firestore
+  // Optimized: Relies on IndexedDB persistentLocalCache and single onSnapshot subscription.
+  // Redundant initial getDocs queries and cascading seeding loops have been eliminated.
   useEffect(() => {
-    // One-time initialization if database is completely empty
-    const initializeDb = async () => {
-      try {
-        const alreadySeeded = localStorage.getItem('care_residents_seeded_v2') === 'true';
-        if (alreadySeeded) return;
+    let isSubscribed = true;
 
-        const resSnapshot = await getDocs(collection(db, 'residents'));
-        if (!resSnapshot.empty) {
-          localStorage.setItem('care_residents_seeded_v2', 'true');
-          return;
-        }
-
-        console.log("Firestore residents collection is empty. Checking local storage...");
-        const savedResidents = localStorage.getItem('care_residents_list');
-        if (savedResidents) {
-          try {
-            const parsed = JSON.parse(savedResidents) as Resident[];
-            if (parsed.length > 0) {
-              console.log("Seeding Firestore with corrected local residents list...");
-              for (const res of parsed) {
-                await setDoc(doc(db, 'residents', res.id), res);
-              }
-              localStorage.setItem('care_residents_seeded_v2', 'true');
-              return;
-            }
-          } catch (e) {
-            console.error("Error parsing saved residents for seeding:", e);
-          }
-        }
-        // If no local storage corrections, seed the original list
-        console.log("No local residents found. Seeding default initial residents...");
-        for (const res of initialResidents) {
-          await setDoc(doc(db, 'residents', res.id), res);
-        }
-        localStorage.setItem('care_residents_seeded_v2', 'true');
-      } catch (err) {
-        console.warn("Notice: Offline or quota limit during residents initialization (fallback to local state):", err);
-      }
-    };
-
-    const initializeReportsDb = async () => {
-      try {
-        const alreadySeeded = localStorage.getItem('care_reports_seeded_v2') === 'true';
-        if (alreadySeeded) return;
-
-        const repSnapshot = await getDocs(collection(db, 'reports'));
-        if (!repSnapshot.empty) {
-          localStorage.setItem('care_reports_seeded_v2', 'true');
-          return;
-        }
-
-        console.log("Firestore reports collection is empty. Checking local storage...");
-        const savedReports = localStorage.getItem('care_reports_list');
-        if (savedReports) {
-          try {
-            const parsed = JSON.parse(savedReports) as CareReport[];
-            if (parsed.length > 0) {
-              console.log("Seeding Firestore with corrected local reports list...");
-              for (const rep of parsed) {
-                await setDoc(doc(db, 'reports', rep.id), rep);
-              }
-              localStorage.setItem('care_reports_seeded_v2', 'true');
-              return;
-            }
-          } catch (e) {
-            console.error("Error parsing saved reports for seeding:", e);
-          }
-        }
-        // If no local storage corrections, seed the original reports
-        console.log("No local reports found. Seeding default initial reports...");
-        for (const rep of initialReports) {
-          await setDoc(doc(db, 'reports', rep.id), rep);
-        }
-        localStorage.setItem('care_reports_seeded_v2', 'true');
-      } catch (err) {
-        console.warn("Notice: Offline or quota limit during reports initialization (fallback to local state):", err);
-      }
-    };
-
-    initializeDb();
-    initializeReportsDb();
-  }, []);
-
-  // Real-time subscriptions (strictly listening and updating React state)
-  useEffect(() => {
     // 1. Subscribe to residents
-    const unsubscribeResidents = onSnapshot(collection(db, 'residents'), (snapshot) => {
+    const unsubscribeResidents = onSnapshot(collection(db, 'residents'), async (snapshot) => {
+      if (!isSubscribed) return;
       const list: Resident[] = [];
       snapshot.forEach((doc) => {
         list.push(doc.data() as Resident);
@@ -173,6 +94,15 @@ export default function App() {
         } catch (e) {
           console.error(e);
         }
+      } else if (snapshot.empty && residents.length > 0) {
+        // Pristine database cold start: seed once in a single atomic batch
+        const ops = residents.map((res) => ({
+          type: 'set' as const,
+          collection: 'residents',
+          id: res.id,
+          data: res,
+        }));
+        await batchWriteDocs(ops);
       }
     }, (error) => {
       console.warn("Residents collection subscription status (using local device storage):", error);
@@ -186,6 +116,7 @@ export default function App() {
 
     // 2. Subscribe to reports
     const unsubscribeReports = onSnapshot(collection(db, 'reports'), (snapshot) => {
+      if (!isSubscribed) return;
       const list: CareReport[] = [];
       snapshot.forEach((doc) => {
         list.push(doc.data() as CareReport);
@@ -233,6 +164,7 @@ export default function App() {
     });
 
     return () => {
+      isSubscribed = false;
       unsubscribeResidents();
       unsubscribeReports();
     };
@@ -413,9 +345,9 @@ export default function App() {
             res,
             instText,
             status: {
-              morning: !!report.morning,
-              noon: !!report.noon,
-              night: !!report.night,
+              morning: hasShiftData(report.morning),
+              noon: hasShiftData(report.noon),
+              night: hasShiftData(report.night),
             },
           };
         }
@@ -442,9 +374,9 @@ export default function App() {
     return filteredResidents.filter((res) => {
       const report = getReportForRes(res);
       if (!report) return false;
-      const hasMorning = !!report.morning;
-      const hasNoon = !!report.noon;
-      const hasNight = !!report.night;
+      const hasMorning = hasShiftData(report.morning);
+      const hasNoon = hasShiftData(report.noon);
+      const hasNight = hasShiftData(report.night);
       const hasInst = !!(report.yamamotoInstructions?.text && report.yamamotoInstructions.text.trim().length > 0);
       return hasMorning || hasNoon || hasNight || hasInst;
     });
@@ -551,7 +483,7 @@ export default function App() {
     const borderClass = shiftKey === 'morning' ? 'border-amber-100' : shiftKey === 'noon' ? 'border-sky-100' : 'border-indigo-100';
     const textTheme = shiftKey === 'morning' ? 'text-amber-800' : shiftKey === 'noon' ? 'text-sky-800' : 'text-indigo-800';
 
-    if (!shiftData) {
+    if (!hasShiftData(shiftData)) {
       return (
         <div 
           onClick={() => handleOpenShiftForm(resId, shiftKey, dateStr)}
@@ -687,16 +619,15 @@ export default function App() {
     setQuickSaveToast('データを復元しました');
     setTimeout(() => setQuickSaveToast(''), 4000);
 
-    // 2. Cloud sync if requested
+    // 2. Cloud sync if requested (batched in single network requests)
     if (syncToCloud) {
       try {
         setCloudSyncStatus('syncing');
-        for (const res of restoredResidents) {
-          await setDoc(doc(db, 'residents', res.id), res);
-        }
-        for (const rep of restoredReports) {
-          await setDoc(doc(db, 'reports', rep.id), rep);
-        }
+        const ops = [
+          ...restoredResidents.map((res) => ({ type: 'set' as const, collection: 'residents', id: res.id, data: res })),
+          ...restoredReports.map((rep) => ({ type: 'set' as const, collection: 'reports', id: rep.id, data: rep })),
+        ];
+        await batchWriteDocs(ops);
         setCloudSyncStatus('synced');
       } catch (err: any) {
         console.warn("Restore cloud sync warning (safely stored locally):", err);
@@ -704,39 +635,6 @@ export default function App() {
         if (msg.includes('Quota') || msg.includes('resource-exhausted') || msg.includes('429')) {
           setCloudSyncStatus('quota_exceeded');
         }
-      }
-    }
-  };
-
-  // Manual cloud refresh / sync
-  const handleManualCloudSync = async () => {
-    try {
-      setCloudSyncStatus('syncing');
-      const repSnapshot = await getDocs(collection(db, 'reports'));
-      const list: CareReport[] = [];
-      repSnapshot.forEach((d) => list.push(d.data() as CareReport));
-      if (list.length > 0) {
-        setReports((prev) => {
-          const map = new Map<string, CareReport>();
-          list.forEach((r) => map.set(r.id, r));
-          prev.forEach((r) => {
-            const ex = map.get(r.id);
-            if (!ex) map.set(r.id, r);
-            else map.set(r.id, { ...ex, ...r });
-          });
-          const merged = Array.from(map.values());
-          localStorage.setItem('care_reports_list', JSON.stringify(merged));
-          return merged;
-        });
-      }
-      setCloudSyncStatus('synced');
-    } catch (err: any) {
-      console.warn("Manual sync error:", err);
-      const msg = err?.message || '';
-      if (msg.includes('Quota') || msg.includes('resource-exhausted') || msg.includes('429')) {
-        setCloudSyncStatus('quota_exceeded');
-      } else {
-        setCloudSyncStatus('offline');
       }
     }
   };
@@ -766,9 +664,9 @@ export default function App() {
       setSelectedDate(updatedRep.date);
     }
 
-    // 2. Synchronize to Firestore
+    // 2. Synchronize to Firestore with debouncing and retry guard
     try {
-      await setDoc(doc(db, 'reports', updatedRep.id), updatedRep);
+      await safeSetDocWithDebounce('reports', updatedRep.id, updatedRep, 350);
       if (cloudSyncStatus === 'quota_exceeded') {
         setCloudSyncStatus('synced');
       }
@@ -842,7 +740,7 @@ export default function App() {
     });
 
     try {
-      await setDoc(doc(db, 'reports', reportId), newReport);
+      await safeSetDocWithDebounce('reports', reportId, newReport, 350);
     } catch (error) {
       console.warn("Error saving instructions to Firestore (saved locally):", error);
     }
@@ -905,7 +803,7 @@ export default function App() {
     });
 
     try {
-      await setDoc(doc(db, 'reports', reportId), toggledReport);
+      await safeSetDocWithDebounce('reports', reportId, toggledReport, 300);
     } catch (error) {
       console.warn("Error toggling confirmation in Firestore (saved locally):", error);
     }
@@ -934,7 +832,7 @@ export default function App() {
     });
 
     try {
-      await deleteDoc(doc(db, 'reports', reportId));
+      await safeDeleteDoc('reports', reportId);
     } catch (error) {
       console.warn("Error deleting report from Firestore:", error);
     }
@@ -955,15 +853,11 @@ export default function App() {
       const newIds = updated.map((r) => r.id);
       const deletedIds = oldIds.filter((id) => !newIds.includes(id));
 
-      // Delete removed ones from Firestore
-      for (const id of deletedIds) {
-        await deleteDoc(doc(db, 'residents', id));
-      }
-
-      // Set/update the new list in Firestore
-      for (const res of updated) {
-        await setDoc(doc(db, 'residents', res.id), res);
-      }
+      const ops = [
+        ...deletedIds.map((id) => ({ type: 'delete' as const, collection: 'residents', id })),
+        ...updated.map((res) => ({ type: 'set' as const, collection: 'residents', id: res.id, data: res })),
+      ];
+      await batchWriteDocs(ops);
     } catch (error) {
       console.warn("Error updating residents in Firestore (saved locally):", error);
     }
@@ -1280,9 +1174,9 @@ export default function App() {
                       })
                       .filter((rep) => {
                         return (
-                          !!rep.morning ||
-                          !!rep.noon ||
-                          !!rep.night ||
+                          hasShiftData(rep.morning) ||
+                          hasShiftData(rep.noon) ||
+                          hasShiftData(rep.night) ||
                           !!(rep.yamamotoInstructions?.text && rep.yamamotoInstructions.text.trim().length > 0)
                         );
                       })
@@ -1409,17 +1303,21 @@ export default function App() {
                         const rep = getReportForRes(res);
                         if (!rep) return null;
 
-                        const hasMorning = !!rep.morning;
-                        const hasNoon = !!rep.noon;
-                        const hasNight = !!rep.night;
+                        const hasMorning = hasShiftData(rep.morning);
+                        const hasNoon = hasShiftData(rep.noon);
+                        const hasNight = hasShiftData(rep.night);
 
                         // Gather alerts
                         const alerts: string[] = [];
-                        if (rep.morning?.categories?.poorHealth) alerts.push(...rep.morning.categories.poorHealth);
-                        if (rep.noon?.categories?.poorHealth) alerts.push(...rep.noon.categories.poorHealth);
-                        if (rep.night?.categories?.poorHealth) alerts.push(...rep.night.categories.poorHealth);
+                        if (hasMorning && rep.morning?.categories?.poorHealth) alerts.push(...rep.morning.categories.poorHealth);
+                        if (hasNoon && rep.noon?.categories?.poorHealth) alerts.push(...rep.noon.categories.poorHealth);
+                        if (hasNight && rep.night?.categories?.poorHealth) alerts.push(...rep.night.categories.poorHealth);
 
-                        const hasHighKt = [rep.morning?.vitals?.kt, rep.noon?.vitals?.kt, rep.night?.vitals?.kt].some(
+                        const hasHighKt = [
+                          hasMorning ? rep.morning?.vitals?.kt : undefined,
+                          hasNoon ? rep.noon?.vitals?.kt : undefined,
+                          hasNight ? rep.night?.vitals?.kt : undefined
+                        ].some(
                           kt => kt && parseFloat(kt) >= 37.5
                         );
 
@@ -1633,55 +1531,63 @@ export default function App() {
                           </div>
 
                           {/* Recorded Shifts Overview */}
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                            {/* Morning */}
-                            <div className={`p-2 rounded-lg border ${rep.morning ? 'bg-white border-emerald-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
-                              <div className="font-bold flex items-center justify-between mb-1">
-                                <span className={rep.morning ? 'text-emerald-800' : 'text-slate-400'}>🌅 朝の記録</span>
-                                {rep.morning && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.morning.reporter || '未詳'}</span>}
-                              </div>
-                              {rep.morning ? (
-                                <div className="text-[11px] space-y-0.5 text-slate-700">
-                                  <div>体温: <span className="font-bold">{rep.morning.vitals?.kt ? `${rep.morning.vitals.kt}℃` : '--'}</span> / 血圧: {rep.morning.vitals?.bpSys || '-'}/{rep.morning.vitals?.bpDia || '-'}</div>
-                                  <div>食事: {rep.morning.meals?.staple || '-'}/{rep.morning.meals?.side || '-'}割 / 水分: {rep.morning.meals?.water ? `${rep.morning.meals.water}ml` : '-'}</div>
-                                </div>
-                              ) : (
-                                <span className="text-[10px]">未入力</span>
-                              )}
-                            </div>
+                          {(() => {
+                            const hasMorning = hasShiftData(rep.morning);
+                            const hasNoon = hasShiftData(rep.noon);
+                            const hasNight = hasShiftData(rep.night);
 
-                            {/* Noon */}
-                            <div className={`p-2 rounded-lg border ${rep.noon ? 'bg-white border-blue-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
-                              <div className="font-bold flex items-center justify-between mb-1">
-                                <span className={rep.noon ? 'text-blue-800' : 'text-slate-400'}>☀️ 昼の記録</span>
-                                {rep.noon && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.noon.reporter || '未詳'}</span>}
-                              </div>
-                              {rep.noon ? (
-                                <div className="text-[11px] space-y-0.5 text-slate-700">
-                                  <div>体温: <span className="font-bold">{rep.noon.vitals?.kt ? `${rep.noon.vitals.kt}℃` : '--'}</span> / 血圧: {rep.noon.vitals?.bpSys || '-'}/{rep.noon.vitals?.bpDia || '-'}</div>
-                                  <div>食事: {rep.noon.meals?.staple || '-'}/{rep.noon.meals?.side || '-'}割 / 水分: {rep.noon.meals?.water ? `${rep.noon.meals.water}ml` : '-'}</div>
+                            return (
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                                {/* Morning */}
+                                <div className={`p-2 rounded-lg border ${hasMorning ? 'bg-white border-emerald-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
+                                  <div className="font-bold flex items-center justify-between mb-1">
+                                    <span className={hasMorning ? 'text-emerald-800' : 'text-slate-400'}>🌅 朝の記録</span>
+                                    {hasMorning && rep.morning && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.morning.reporter || '未詳'}</span>}
+                                  </div>
+                                  {hasMorning && rep.morning ? (
+                                    <div className="text-[11px] space-y-0.5 text-slate-700">
+                                      <div>体温: <span className="font-bold">{rep.morning.vitals?.kt ? `${rep.morning.vitals.kt}℃` : '--'}</span> / 血圧: {rep.morning.vitals?.bpSys || '-'}/{rep.morning.vitals?.bpDia || '-'}</div>
+                                      <div>食事: {rep.morning.meals?.staple || '-'}/{rep.morning.meals?.side || '-'}割 / 水分: {rep.morning.meals?.water ? `${rep.morning.meals.water}ml` : '-'}</div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[10px]">未入力</span>
+                                  )}
                                 </div>
-                              ) : (
-                                <span className="text-[10px]">未入力</span>
-                              )}
-                            </div>
 
-                            {/* Night */}
-                            <div className={`p-2 rounded-lg border ${rep.night ? 'bg-white border-purple-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
-                              <div className="font-bold flex items-center justify-between mb-1">
-                                <span className={rep.night ? 'text-purple-800' : 'text-slate-400'}>🌙 夜の記録</span>
-                                {rep.night && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.night.reporter || '未詳'}</span>}
-                              </div>
-                              {rep.night ? (
-                                <div className="text-[11px] space-y-0.5 text-slate-700">
-                                  <div>体温: <span className="font-bold">{rep.night.vitals?.kt ? `${rep.night.vitals.kt}℃` : '--'}</span> / 血圧: {rep.night.vitals?.bpSys || '-'}/{rep.night.vitals?.bpDia || '-'}</div>
-                                  <div>食事: {rep.night.meals?.staple || '-'}/{rep.night.meals?.side || '-'}割 / 水分: {rep.night.meals?.water ? `${rep.night.meals.water}ml` : '-'}</div>
+                                {/* Noon */}
+                                <div className={`p-2 rounded-lg border ${hasNoon ? 'bg-white border-blue-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
+                                  <div className="font-bold flex items-center justify-between mb-1">
+                                    <span className={hasNoon ? 'text-blue-800' : 'text-slate-400'}>☀️ 昼の記録</span>
+                                    {hasNoon && rep.noon && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.noon.reporter || '未詳'}</span>}
+                                  </div>
+                                  {hasNoon && rep.noon ? (
+                                    <div className="text-[11px] space-y-0.5 text-slate-700">
+                                      <div>体温: <span className="font-bold">{rep.noon.vitals?.kt ? `${rep.noon.vitals.kt}℃` : '--'}</span> / 血圧: {rep.noon.vitals?.bpSys || '-'}/{rep.noon.vitals?.bpDia || '-'}</div>
+                                      <div>食事: {rep.noon.meals?.staple || '-'}/{rep.noon.meals?.side || '-'}割 / 水分: {rep.noon.meals?.water ? `${rep.noon.meals.water}ml` : '-'}</div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[10px]">未入力</span>
+                                  )}
                                 </div>
-                              ) : (
-                                <span className="text-[10px]">未入力</span>
-                              )}
-                            </div>
-                          </div>
+
+                                {/* Night */}
+                                <div className={`p-2 rounded-lg border ${hasNight ? 'bg-white border-purple-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
+                                  <div className="font-bold flex items-center justify-between mb-1">
+                                    <span className={hasNight ? 'text-purple-800' : 'text-slate-400'}>🌙 夜の記録</span>
+                                    {hasNight && rep.night && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.night.reporter || '未詳'}</span>}
+                                  </div>
+                                  {hasNight && rep.night ? (
+                                    <div className="text-[11px] space-y-0.5 text-slate-700">
+                                      <div>体温: <span className="font-bold">{rep.night.vitals?.kt ? `${rep.night.vitals.kt}℃` : '--'}</span> / 血圧: {rep.night.vitals?.bpSys || '-'}/{rep.night.vitals?.bpDia || '-'}</div>
+                                      <div>食事: {rep.night.meals?.staple || '-'}/{rep.night.meals?.side || '-'}割 / 水分: {rep.night.meals?.water ? `${rep.night.meals.water}ml` : '-'}</div>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[10px]">未入力</span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Action buttons */}

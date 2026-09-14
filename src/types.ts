@@ -43,3 +43,51 @@ export interface Resident {
   careLevel?: string; // Care level (e.g. 要介護2)
   memo?: string;
 }
+
+/**
+ * Checks if a shift has actual recorded observation data (vitals, meals, symptoms, or notes).
+ * Returns false if shift is null/undefined or if all fields are empty/cleared.
+ */
+export function hasShiftData(shift: ShiftRecord | null | undefined): boolean {
+  if (!shift) return false;
+
+  const hasVitals = !!(
+    (shift.vitals?.kt && shift.vitals.kt.trim() !== '') ||
+    (shift.vitals?.bpSys && shift.vitals.bpSys.trim() !== '') ||
+    (shift.vitals?.bpDia && shift.vitals.bpDia.trim() !== '') ||
+    (shift.vitals?.pr && shift.vitals.pr.trim() !== '')
+  );
+  if (hasVitals) return true;
+
+  const hasMeals = !!(
+    (shift.meals?.staple && shift.meals.staple.trim() !== '') ||
+    (shift.meals?.side && shift.meals.side.trim() !== '') ||
+    (shift.meals?.lacol && shift.meals.lacol.trim() !== '') ||
+    (shift.meals?.water && shift.meals.water.trim() !== '')
+  );
+  if (hasMeals) return true;
+
+  const hasCategories = !!(
+    (shift.categories?.poorHealth && shift.categories.poorHealth.length > 0) ||
+    (shift.categories?.injuryGait && shift.categories.injuryGait.length > 0) ||
+    (shift.categories?.elimination && shift.categories.elimination.length > 0)
+  );
+  if (hasCategories) return true;
+
+  const hasOtherText = !!(shift.otherSymptomText && shift.otherSymptomText.trim() !== '');
+  if (hasOtherText) return true;
+
+  return false;
+}
+
+/**
+ * Checks if a CareReport contains at least one recorded shift or doctor instructions.
+ */
+export function hasReportData(report: CareReport | null | undefined): boolean {
+  if (!report) return false;
+  if (hasShiftData(report.morning)) return true;
+  if (hasShiftData(report.noon)) return true;
+  if (hasShiftData(report.night)) return true;
+  if (report.yamamotoInstructions?.text && report.yamamotoInstructions.text.trim().length > 0) return true;
+  return false;
+}
