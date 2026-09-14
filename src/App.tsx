@@ -6,6 +6,7 @@ import ReportCard from './components/ReportCard';
 import ReportFormModal from './components/ReportFormModal';
 import TrendChartsModal from './components/TrendChartsModal';
 import MasterListModal from './components/MasterListModal';
+import { BackupRestoreModal } from './components/BackupRestoreModal';
 import { 
   Calendar, 
   Search, 
@@ -24,7 +25,9 @@ import {
   List,
   LayoutGrid,
   Trash2,
-  Edit3
+  Edit3,
+  Download,
+  Upload
 } from 'lucide-react';
 import { collection, onSnapshot, setDoc, doc, deleteDoc, getDocs } from 'firebase/firestore';
 import { db } from './lib/firebase';
@@ -164,6 +167,7 @@ export default function App() {
       });
       if (list.length > 0) {
         setResidents(list);
+        setCloudSyncStatus('synced');
         try {
           localStorage.setItem('care_residents_list', JSON.stringify(list));
         } catch (e) {
@@ -172,6 +176,12 @@ export default function App() {
       }
     }, (error) => {
       console.warn("Residents collection subscription status (using local device storage):", error);
+      const msg = error?.message || '';
+      if (msg.includes('Quota') || msg.includes('resource-exhausted') || msg.includes('429')) {
+        setCloudSyncStatus('quota_exceeded');
+      } else {
+        setCloudSyncStatus('offline');
+      }
     });
 
     // 2. Subscribe to reports
@@ -181,6 +191,7 @@ export default function App() {
         list.push(doc.data() as CareReport);
       });
       if (list.length > 0) {
+        setCloudSyncStatus('synced');
         setReports((prev) => {
           // Merge Firestore snapshot with local state so newly recorded local entries are preserved
           const map = new Map<string, CareReport>();
@@ -213,6 +224,12 @@ export default function App() {
       }
     }, (error) => {
       console.warn("Reports collection subscription status (using local device storage):", error);
+      const msg = error?.message || '';
+      if (msg.includes('Quota') || msg.includes('resource-exhausted') || msg.includes('429')) {
+        setCloudSyncStatus('quota_exceeded');
+      } else {
+        setCloudSyncStatus('offline');
+      }
     });
 
     return () => {
@@ -266,6 +283,9 @@ export default function App() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isTrendOpen, setIsTrendOpen] = useState(false);
   const [isMasterOpen, setIsMasterOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [quickSaveToast, setQuickSaveToast] = useState<string>('');
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'quota_exceeded' | 'offline' | 'syncing'>('syncing');
   
   // States for form modal initialization
   const [activeResId, setActiveResId] = useState<string>('');
@@ -617,6 +637,110 @@ export default function App() {
 
   // --- 5. ACTION HANDLERS ---
   
+  // Quick Direct Backup Download (one-click instant JSON save)
+  const handleQuickDownloadBackup = () => {
+    try {
+      const backupData = {
+        version: '2.0.0',
+        app: 'care_reports',
+        exportedAt: new Date().toISOString(),
+        residents,
+        reports,
+      };
+      const jsonStr = JSON.stringify(backupData, null, 2);
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const filename = `care_reports_backup_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}.json`;
+
+      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setQuickSaveToast('データを保存しました');
+      setTimeout(() => setQuickSaveToast(''), 4000);
+    } catch (e) {
+      console.error('Quick download backup error:', e);
+    }
+  };
+
+  // Restore handler passed to modal
+  const handleRestoreData = async (restoredResidents: Resident[], restoredReports: CareReport[], syncToCloud: boolean) => {
+    // 1. Local state update
+    setResidents(restoredResidents);
+    setReports(restoredReports);
+
+    try {
+      localStorage.setItem('care_residents_list', JSON.stringify(restoredResidents));
+      localStorage.setItem('care_reports_list', JSON.stringify(restoredReports));
+      localStorage.setItem('care_residents_seeded_v2', 'true');
+      localStorage.setItem('care_reports_seeded_v2', 'true');
+    } catch (err) {
+      console.error("Local persistence error:", err);
+    }
+
+    setQuickSaveToast('データを復元しました');
+    setTimeout(() => setQuickSaveToast(''), 4000);
+
+    // 2. Cloud sync if requested
+    if (syncToCloud) {
+      try {
+        setCloudSyncStatus('syncing');
+        for (const res of restoredResidents) {
+          await setDoc(doc(db, 'residents', res.id), res);
+        }
+        for (const rep of restoredReports) {
+          await setDoc(doc(db, 'reports', rep.id), rep);
+        }
+        setCloudSyncStatus('synced');
+      } catch (err: any) {
+        console.warn("Restore cloud sync warning (safely stored locally):", err);
+        const msg = err?.message || '';
+        if (msg.includes('Quota') || msg.includes('resource-exhausted') || msg.includes('429')) {
+          setCloudSyncStatus('quota_exceeded');
+        }
+      }
+    }
+  };
+
+  // Manual cloud refresh / sync
+  const handleManualCloudSync = async () => {
+    try {
+      setCloudSyncStatus('syncing');
+      const repSnapshot = await getDocs(collection(db, 'reports'));
+      const list: CareReport[] = [];
+      repSnapshot.forEach((d) => list.push(d.data() as CareReport));
+      if (list.length > 0) {
+        setReports((prev) => {
+          const map = new Map<string, CareReport>();
+          list.forEach((r) => map.set(r.id, r));
+          prev.forEach((r) => {
+            const ex = map.get(r.id);
+            if (!ex) map.set(r.id, r);
+            else map.set(r.id, { ...ex, ...r });
+          });
+          const merged = Array.from(map.values());
+          localStorage.setItem('care_reports_list', JSON.stringify(merged));
+          return merged;
+        });
+      }
+      setCloudSyncStatus('synced');
+    } catch (err: any) {
+      console.warn("Manual sync error:", err);
+      const msg = err?.message || '';
+      if (msg.includes('Quota') || msg.includes('resource-exhausted') || msg.includes('429')) {
+        setCloudSyncStatus('quota_exceeded');
+      } else {
+        setCloudSyncStatus('offline');
+      }
+    }
+  };
+
   // Save or update report
   const handleSaveReport = async (updatedRep: CareReport) => {
     // 1. Immediately update React state and localStorage (optimistic & resilient to quota/offline)
@@ -645,8 +769,15 @@ export default function App() {
     // 2. Synchronize to Firestore
     try {
       await setDoc(doc(db, 'reports', updatedRep.id), updatedRep);
-    } catch (error) {
+      if (cloudSyncStatus === 'quota_exceeded') {
+        setCloudSyncStatus('synced');
+      }
+    } catch (error: any) {
       console.warn("Firestore sync warning (record is safely stored locally on device):", error);
+      const msg = error?.message || '';
+      if (msg.includes('Quota') || msg.includes('resource-exhausted') || msg.includes('429')) {
+        setCloudSyncStatus('quota_exceeded');
+      }
     }
 
     if (appMode === 'helper') {
@@ -953,6 +1084,24 @@ export default function App() {
         </div>
       </header>
 
+      {/* Quick Save Toast Banner */}
+      {quickSaveToast && (
+        <div className="bg-emerald-50 border-b-2 border-emerald-500 px-4 py-2.5 flex items-center justify-between text-xs sm:text-sm font-black text-emerald-950 shadow-sm animate-fade-in z-30">
+          <div className="max-w-7xl mx-auto w-full flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+              <span>{quickSaveToast}</span>
+            </div>
+            <button
+              onClick={() => setQuickSaveToast('')}
+              className="text-emerald-700 hover:text-emerald-900 font-black px-2 py-0.5 text-xs rounded hover:bg-emerald-100 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ==================== LOWER BLOCK: SECOND ROW CONTROL BAR ==================== */}
       <div className="bg-white border-b border-slate-200 py-3 shadow-xs sticky top-[73px] lg:top-[69px] z-30">
         <div className="max-w-7xl mx-auto px-4 flex flex-col space-y-3">
@@ -1010,9 +1159,49 @@ export default function App() {
                     <Settings className="h-4 w-4" />
                     <span>名簿インポート・登録</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={handleQuickDownloadBackup}
+                    className="flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-extrabold text-xs px-3.5 py-2.5 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
+                    title="現在の記録と名簿をファイルに保存します"
+                  >
+                    <Download className="h-4 w-4 text-emerald-700" />
+                    <span>データ保存</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsBackupModalOpen(true)}
+                    className="flex items-center space-x-1.5 bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs px-3.5 py-2.5 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
+                    title="保存したファイルから記録を復元します"
+                  >
+                    <Upload className="h-4 w-4 text-emerald-700" />
+                    <span>データ復元</span>
+                  </button>
                 </div>
               </>
-            ) : null}
+            ) : (
+              /* Helper mode buttons */
+              <div className="flex items-center space-x-2.5 justify-end w-full">
+                <button
+                  type="button"
+                  onClick={handleQuickDownloadBackup}
+                  className="flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
+                >
+                  <Download className="h-3.5 w-3.5 text-emerald-700" />
+                  <span>データ保存</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsBackupModalOpen(true)}
+                  className="flex items-center space-x-1.5 bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
+                >
+                  <Upload className="h-3.5 w-3.5 text-emerald-700" />
+                  <span>データ復元</span>
+                </button>
+              </div>
+            )}
           </div>
 
         </div>
@@ -1563,6 +1752,15 @@ export default function App() {
         onClose={() => setIsMasterOpen(false)}
         residents={residents}
         onUpdateResidents={handleUpdateResidents}
+      />
+
+      {/* Modal 4: Backup & Restore Manager */}
+      <BackupRestoreModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        residents={residents}
+        reports={reports}
+        onRestoreData={handleRestoreData}
       />
 
     </div>
