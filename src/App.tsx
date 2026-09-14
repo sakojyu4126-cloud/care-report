@@ -73,6 +73,16 @@ export default function App() {
     return initialReports;
   });
 
+  // Track permanently deleted report IDs so real-time listeners never resurrect them
+  const deletedReportIdsRef = useRef<Set<string>>(new Set());
+
+  // In-app modal state for deleting care reports (avoids iframe-blocked window.confirm)
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<{
+    reportId: string;
+    resName: string;
+    dateStr: string;
+  } | null>(null);
+
   // Real-time synchronization with Firestore
   // Optimized: Relies on IndexedDB persistentLocalCache and single onSnapshot subscription.
   // Redundant initial getDocs queries and cascading seeding loops have been eliminated.
@@ -124,24 +134,18 @@ export default function App() {
       if (list.length > 0) {
         setCloudSyncStatus('synced');
         setReports((prev) => {
-          // Merge Firestore snapshot with local state so newly recorded local entries are preserved
           const map = new Map<string, CareReport>();
-          // 1. Put remote records
-          list.forEach((r) => map.set(r.id, r));
-          // 2. Merge local records so optimistic saves are never overwritten
-          prev.forEach((r) => {
-            const existing = map.get(r.id);
-            if (!existing) {
+          // 1. Put remote records, ignoring any locally deleted report IDs
+          list.forEach((r) => {
+            if (!deletedReportIdsRef.current.has(r.id)) {
               map.set(r.id, r);
-            } else {
-              map.set(r.id, {
-                ...existing,
-                ...r,
-                morning: r.morning || existing.morning,
-                noon: r.noon || existing.noon,
-                night: r.night || existing.night,
-                yamamotoInstructions: hasAnyYamamotoInstruction(r) ? r.yamamotoInstructions : existing.yamamotoInstructions,
-              });
+            }
+          });
+          // 2. Keep any newly created optimistic local records that haven't reached Firestore yet
+          prev.forEach((r) => {
+            if (deletedReportIdsRef.current.has(r.id)) return;
+            if (!map.has(r.id)) {
+              map.set(r.id, r);
             }
           });
           const merged = Array.from(map.values());
@@ -439,15 +443,21 @@ export default function App() {
   };
 
   const renderCompactBadges = (shift: any) => {
-    const badges: string[] = [];
+    const badges: { text: string; color: string }[] = [];
     if (shift.categories.poorHealth.length > 0) {
-      badges.push(...shift.categories.poorHealth.map((c: string) => `体調: ${c}`));
+      shift.categories.poorHealth.forEach((c: string) => {
+        badges.push({ text: `体調: ${c}`, color: 'bg-orange-500 text-white border-orange-600' });
+      });
     }
     if (shift.categories.injuryGait.length > 0) {
-      badges.push(...shift.categories.injuryGait.map((c: string) => `怪我歩行: ${c}`));
+      shift.categories.injuryGait.forEach((c: string) => {
+        badges.push({ text: `怪我歩行: ${c}`, color: 'bg-amber-600 text-white border-amber-700' });
+      });
     }
     if (shift.categories.elimination.length > 0) {
-      badges.push(...shift.categories.elimination.map((c: string) => `排泄: ${c}`));
+      shift.categories.elimination.forEach((c: string) => {
+        badges.push({ text: `排泄: ${c}`, color: 'bg-indigo-600 text-white border-indigo-700' });
+      });
     }
 
     if (badges.length === 0 && !shift.otherSymptomText) return null;
@@ -457,8 +467,8 @@ export default function App() {
         {badges.length > 0 && (
           <div className="flex flex-wrap gap-0.5">
             {badges.map((b, idx) => (
-              <span key={idx} className="inline-block text-[9px] px-1 py-0.5 rounded bg-red-50 text-red-700 border border-red-100 font-extrabold">
-                {b}
+              <span key={idx} className={`inline-block text-[9px] px-1 py-0.5 rounded border font-extrabold ${b.color}`}>
+                {b.text}
               </span>
             ))}
           </div>
@@ -509,9 +519,11 @@ export default function App() {
             <span className={`text-[10px] font-black px-1.5 py-0.5 rounded bg-white border ${borderClass} ${textTheme}`}>
               {title}
             </span>
-            <span className="text-[10px] text-slate-500 font-bold" title="記録者">
-              担当: {shiftData.reporter || '未詳'}
-            </span>
+            {shiftData.reporter?.trim() ? (
+              <span className="text-[10px] text-slate-500 font-bold" title="記録者">
+                担当: {shiftData.reporter}
+              </span>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-1 mb-2 bg-white/75 p-1.5 rounded border border-slate-100 text-[11px]">
@@ -641,6 +653,9 @@ export default function App() {
 
   // Save or update report
   const handleSaveReport = async (updatedRep: CareReport) => {
+    // Unmark from deleted set if re-saved
+    deletedReportIdsRef.current.delete(updatedRep.id);
+
     // 1. Immediately update React state and localStorage (optimistic & resilient to quota/offline)
     setReports((prev) => {
       const idx = prev.findIndex((r) => r.id === updatedRep.id || (r.residentId === updatedRep.residentId && r.date === updatedRep.date));
@@ -664,9 +679,9 @@ export default function App() {
       setSelectedDate(updatedRep.date);
     }
 
-    // 2. Synchronize to Firestore with debouncing and retry guard
+    // 2. Synchronize to Firestore with retry guard
     try {
-      await safeSetDocWithDebounce('reports', updatedRep.id, updatedRep, 350);
+      await safeSetDocWithDebounce('reports', updatedRep.id, updatedRep, 0);
       if (cloudSyncStatus === 'quota_exceeded') {
         setCloudSyncStatus('synced');
       }
@@ -852,18 +867,12 @@ export default function App() {
     }
   };
 
-  // Delete report completely from Firestore
-  const handleDeleteReport = async (reportId: string) => {
-    const report = reports.find((r) => r.id === reportId);
-    if (!report) return;
+  // Execute permanent deletion of a report
+  const executeDeleteReport = async (reportId: string) => {
+    // 1. Mark ID as deleted so real-time onSnapshot never restores it
+    deletedReportIdsRef.current.add(reportId);
 
-    const res = residents.find((r) => r.id === report.residentId);
-    const resName = res ? `${res.roomNumber ? `${res.roomNumber}号室: ` : ''}${res.name}` : '利用者';
-
-    if (!window.confirm(`【削除確認】\n${resName} 様の ${formatDateJapanese(report.date)} のすべての介護記録（朝・昼・夜のデータおよび指示コメント）を完全に削除しますか？\nこの操作は取り消せません。`)) {
-      return;
-    }
-
+    // 2. Remove immediately from local state & cache
     setReports((prev) => {
       const next = prev.filter((r) => r.id !== reportId);
       try {
@@ -874,11 +883,44 @@ export default function App() {
       return next;
     });
 
+    // 3. Close edit form modal if it was open for this report
+    if (editingReport && editingReport.id === reportId) {
+      setIsFormOpen(false);
+      setEditingReport(null);
+    }
+
+    // 4. Delete document from Firestore
     try {
       await safeDeleteDoc('reports', reportId);
     } catch (error) {
       console.warn("Error deleting report from Firestore:", error);
     }
+
+    setDeleteConfirmTarget(null);
+  };
+
+  // Delete report completely (opens in-app modal or executes directly if force=true)
+  const handleDeleteReport = (reportId: string, force = false) => {
+    if (force) {
+      executeDeleteReport(reportId);
+      return;
+    }
+
+    const report = reports.find((r) => r.id === reportId);
+    if (!report) {
+      executeDeleteReport(reportId);
+      return;
+    }
+
+    const res = residents.find((r) => r.id === report.residentId);
+    const resName = res ? `${res.roomNumber ? `${res.roomNumber}号室: ` : ''}${res.name}` : '利用者';
+    const dateStr = formatDateJapanese(report.date);
+
+    setDeleteConfirmTarget({
+      reportId,
+      resName,
+      dateStr,
+    });
   };
 
   // Save or update residents list to Firestore
@@ -913,10 +955,17 @@ export default function App() {
     setActiveShift(shift);
     setFormDate(targetDate);
     
-    const reportId = `${resId}_${targetDate}`;
-    const existing = reports.find((r) => r.id === reportId) || null;
+    // Find existing report reliably
+    const targetRes = residents.find((r) => r.id === resId);
+    let existing: CareReport | null = null;
+    if (targetRes) {
+      existing = date ? getReportForResidentAndDate(targetRes, date) : getReportForRes(targetRes);
+    }
+    if (!existing) {
+      existing = reports.find((r) => (r.id === `${resId}_${targetDate}`) || (r.residentId === resId && r.date === targetDate)) || null;
+    }
+
     setEditingReport(existing);
-    
     setIsFormOpen(true);
   };
 
@@ -1070,69 +1119,51 @@ export default function App() {
           </div>
 
           {/* Sub Control bar - conditionally rendered based on selected mode */}
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4 pt-1">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
             {appMode === 'view_instruct' ? (
-              <>
-                {/* View & Instruct controls */}
-                <div className="flex items-center space-x-3 w-full md:w-auto">
-                  <button
-                    onClick={() => {
-                      if (residents.length > 0) {
-                        setActiveResId(residents[0].id);
-                      }
-                      setIsTrendOpen(true);
-                    }}
-                    className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-white font-extrabold text-xs px-4 py-2.5 rounded-lg shadow-sm transition-colors cursor-pointer"
-                  >
-                    <TrendingUp className="h-4 w-4 text-cyan-400" />
-                    <span>推移グラフを表示</span>
-                  </button>
-
-                  <button
-                    onClick={() => setIsMasterOpen(true)}
-                    className="flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs px-3.5 py-2.5 rounded-lg border border-slate-300 transition-colors cursor-pointer"
-                    title="利用者名簿マスター設定"
-                  >
-                    <Settings className="h-4 w-4" />
-                    <span>名簿インポート・登録</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleQuickDownloadBackup}
-                    className="flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-extrabold text-xs px-3.5 py-2.5 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
-                    title="現在の記録と名簿をファイルに保存します"
-                  >
-                    <Download className="h-4 w-4 text-emerald-700" />
-                    <span>データ保存</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsBackupModalOpen(true)}
-                    className="flex items-center space-x-1.5 bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs px-3.5 py-2.5 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
-                    title="保存したファイルから記録を復元します"
-                  >
-                    <Upload className="h-4 w-4 text-emerald-700" />
-                    <span>データ復元</span>
-                  </button>
-                </div>
-              </>
+              /* View & Instruct mode: ONLY "推移グラフを表示" is shown */
+              <div className="flex items-center space-x-3 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (residents.length > 0) {
+                      setActiveResId(residents[0].id);
+                    }
+                    setIsTrendOpen(true);
+                  }}
+                  className="flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-700 text-white font-extrabold text-xs px-4 py-2.5 rounded-lg shadow-sm transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <TrendingUp className="h-4 w-4 text-cyan-400" />
+                  <span>推移グラフを表示</span>
+                </button>
+              </div>
             ) : (
-              /* Helper mode buttons */
-              <div className="flex items-center space-x-2.5 justify-end w-full">
+              /* Helper mode buttons: "データ登録" (no icon), "データ保存", "データ復元" */
+              <div className="flex flex-wrap items-center gap-2 justify-start sm:justify-end w-full">
+                <button
+                  type="button"
+                  onClick={() => setIsMasterOpen(true)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-slate-300 transition-colors cursor-pointer whitespace-nowrap shadow-3xs"
+                  title="利用者名簿マスター設定・データ登録"
+                >
+                  <span>データ登録</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={handleQuickDownloadBackup}
-                  className="flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
+                  className="flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-emerald-300 transition-colors cursor-pointer whitespace-nowrap shadow-3xs"
+                  title="現在の記録と名簿をファイルに保存します"
                 >
                   <Download className="h-3.5 w-3.5 text-emerald-700" />
                   <span>データ保存</span>
                 </button>
+
                 <button
                   type="button"
                   onClick={() => setIsBackupModalOpen(true)}
-                  className="flex items-center space-x-1.5 bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-emerald-300 transition-colors cursor-pointer shadow-3xs"
+                  className="flex items-center space-x-1.5 bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs px-3.5 py-2 rounded-lg border border-emerald-300 transition-colors cursor-pointer whitespace-nowrap shadow-3xs"
+                  title="保存したファイルから記録を復元します"
                 >
                   <Upload className="h-3.5 w-3.5 text-emerald-700" />
                   <span>データ復元</span>
@@ -1420,7 +1451,7 @@ export default function App() {
                                 </div>
 
                                 {alerts.length > 0 && (
-                                  <span className="bg-red-50 text-red-700 border border-red-300 text-xs font-black px-2 py-0.5 rounded shadow-3xs">
+                                  <span className="bg-orange-500 text-white border border-orange-600 text-xs font-black px-2 py-0.5 rounded shadow-3xs">
                                     体調不良: {alerts[0]}{alerts.length > 1 ? ` 他${alerts.length - 1}件` : ''}
                                   </span>
                                 )}
@@ -1433,7 +1464,7 @@ export default function App() {
                                   <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
                                     morningInst.confirmed 
                                       ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
-                                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                                      : 'bg-red-600 text-white border-red-700 shadow-3xs'
                                   }`}>
                                     指示[朝]: {morningInst.confirmed ? '確認済' : '未確認'}
                                   </span>
@@ -1442,7 +1473,7 @@ export default function App() {
                                   <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
                                     noonInst.confirmed 
                                       ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
-                                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                                      : 'bg-red-600 text-white border-red-700 shadow-3xs'
                                   }`}>
                                     指示[昼]: {noonInst.confirmed ? '確認済' : '未確認'}
                                   </span>
@@ -1451,7 +1482,7 @@ export default function App() {
                                   <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
                                     nightInst.confirmed 
                                       ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
-                                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                                      : 'bg-red-600 text-white border-red-700 shadow-3xs'
                                   }`}>
                                     指示[夜]: {nightInst.confirmed ? '確認済' : '未確認'}
                                   </span>
@@ -1460,7 +1491,7 @@ export default function App() {
                                   <span className={`text-[11px] font-black px-2 py-0.5 rounded border ${
                                     isOverallConfirmed 
                                       ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
-                                      : 'bg-rose-50 text-rose-700 border-rose-300'
+                                      : 'bg-red-600 text-white border-red-700 shadow-3xs'
                                   }`}>
                                     指示[全日]: {isOverallConfirmed ? '確認済' : '未確認'}
                                   </span>
@@ -1615,7 +1646,7 @@ export default function App() {
                                 <div className={`p-2 rounded-lg border ${hasMorning ? 'bg-white border-emerald-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
                                   <div className="font-bold flex items-center justify-between mb-1">
                                     <span className={hasMorning ? 'text-emerald-800' : 'text-slate-400'}>🌅 朝の記録</span>
-                                    {hasMorning && rep.morning && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.morning.reporter || '未詳'}</span>}
+                                    {hasMorning && rep.morning?.reporter?.trim() && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.morning.reporter}</span>}
                                   </div>
                                   {hasMorning && rep.morning ? (
                                     <div className="text-[11px] space-y-0.5 text-slate-700">
@@ -1631,7 +1662,7 @@ export default function App() {
                                 <div className={`p-2 rounded-lg border ${hasNoon ? 'bg-white border-blue-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
                                   <div className="font-bold flex items-center justify-between mb-1">
                                     <span className={hasNoon ? 'text-blue-800' : 'text-slate-400'}>☀️ 昼の記録</span>
-                                    {hasNoon && rep.noon && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.noon.reporter || '未詳'}</span>}
+                                    {hasNoon && rep.noon?.reporter?.trim() && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.noon.reporter}</span>}
                                   </div>
                                   {hasNoon && rep.noon ? (
                                     <div className="text-[11px] space-y-0.5 text-slate-700">
@@ -1647,7 +1678,7 @@ export default function App() {
                                 <div className={`p-2 rounded-lg border ${hasNight ? 'bg-white border-purple-300 shadow-3xs' : 'bg-slate-100/60 border-slate-200 text-slate-400'}`}>
                                   <div className="font-bold flex items-center justify-between mb-1">
                                     <span className={hasNight ? 'text-purple-800' : 'text-slate-400'}>🌙 夜の記録</span>
-                                    {hasNight && rep.night && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.night.reporter || '未詳'}</span>}
+                                    {hasNight && rep.night?.reporter?.trim() && <span className="text-[10px] text-slate-500 font-normal">担当: {rep.night.reporter}</span>}
                                   </div>
                                   {hasNight && rep.night ? (
                                     <div className="text-[11px] space-y-0.5 text-slate-700">
@@ -1741,6 +1772,55 @@ export default function App() {
         reports={reports}
         onRestoreData={handleRestoreData}
       />
+
+      {/* Modal 5: Delete Confirmation Modal (avoids browser iframe alert/confirm blockage) */}
+      {deleteConfirmTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center space-x-3 text-red-600 mb-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-100">
+                <Trash2 className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">介護記録の完全削除</h3>
+                <p className="text-xs text-slate-500">この操作は取り消せません</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 mb-5 space-y-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-bold">対象利用者:</span>
+                <span className="font-black text-slate-800">{deleteConfirmTarget.resName} 様</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-bold">記録日:</span>
+                <span className="font-black text-slate-800">{deleteConfirmTarget.dateStr}</span>
+              </div>
+              <p className="mt-2 text-[11px] text-red-600 font-bold pt-1 border-t border-slate-200">
+                ※この日の朝・昼・夜のすべてのデータおよび指示が削除され、「未入力」に戻ります。
+              </p>
+            </div>
+
+            <div className="flex justify-end space-x-2.5">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmTarget(null)}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => executeDeleteReport(deleteConfirmTarget.reportId)}
+                className="flex items-center space-x-1.5 rounded-lg bg-red-600 px-4 py-2 text-xs font-black text-white hover:bg-red-700 transition-colors cursor-pointer shadow-xs"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>削除を実行する</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

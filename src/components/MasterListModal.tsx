@@ -41,6 +41,9 @@ export default function MasterListModal({
   const [editCare, setEditCare] = useState('');
   const [editMemo, setEditMemo] = useState('');
 
+  // Delete confirmation state (replaces window.confirm)
+  const [deleteTargetResident, setDeleteTargetResident] = useState<{ id: string; name: string } | null>(null);
+
   if (!isOpen) return null;
 
   // Handle start editing
@@ -100,10 +103,15 @@ export default function MasterListModal({
     setActiveTab('list');
   };
 
-  // Delete a resident
+  // Delete a resident (opens in-modal confirmation)
   const handleDeleteResident = (id: string, name: string) => {
-    if (window.confirm(`「${name}」様を名簿から削除しますか？\n（この操作は取り消せません）`)) {
-      onUpdateResidents(residents.filter((r) => r.id !== id));
+    setDeleteTargetResident({ id, name });
+  };
+
+  const confirmDeleteResident = () => {
+    if (deleteTargetResident) {
+      onUpdateResidents(residents.filter((r) => r.id !== deleteTargetResident.id));
+      setDeleteTargetResident(null);
     }
   };
 
@@ -593,6 +601,43 @@ export default function MasterListModal({
             閉じる
           </button>
         </div>
+
+        {/* Resident Delete Confirmation Modal */}
+        {deleteTargetResident && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-150">
+            <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl border border-slate-200">
+              <div className="flex items-center space-x-3 text-red-600 mb-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-100">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-slate-900">利用者の削除確認</h4>
+                  <p className="text-[11px] text-slate-500">この操作は取り消せません</p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-700 mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                「<span className="font-bold text-slate-900">{deleteTargetResident.name}</span>」様を名簿から削除しますか？
+              </p>
+              <div className="flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteTargetResident(null)}
+                  className="rounded-lg border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDeleteResident}
+                  className="flex items-center space-x-1.5 rounded-lg bg-red-600 px-3.5 py-1.5 text-xs font-black text-white hover:bg-red-700 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>削除する</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

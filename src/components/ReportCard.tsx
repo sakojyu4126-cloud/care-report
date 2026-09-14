@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CareReport, Resident, ShiftRecord, ShiftType, hasShiftData, getShiftYamamotoInstruction } from '../types';
-import { Check, Edit3, Eye, EyeOff } from 'lucide-react';
+import { Check, Edit3, Eye, EyeOff, Trash2 } from 'lucide-react';
 
 interface ReportCardProps {
   key?: string;
@@ -20,6 +20,7 @@ export default function ReportCard({
   onToggleYamamotoConfirm,
   onSaveYamamotoInstructions,
   dateLabel,
+  onDeleteReport,
 }: ReportCardProps) {
   // Shift-level collapse states
   const [collapsedShifts, setCollapsedShifts] = useState<{
@@ -141,7 +142,7 @@ export default function ReportCard({
     
     if (shift.categories.poorHealth.length > 0) {
       shift.categories.poorHealth.forEach(c => {
-        badges.push({ text: `体調不良: ${c}`, color: 'bg-red-50 text-red-700 border-red-300' });
+        badges.push({ text: `体調不良: ${c}`, color: 'bg-orange-500 text-white border-orange-600 font-extrabold' });
       });
     }
     
@@ -201,9 +202,11 @@ export default function ReportCard({
               {title}
             </span>
             {shiftData && (
-              <span className="inline-flex items-center text-xs text-slate-700 bg-white/80 border border-slate-200 px-2 py-0.5 rounded-md font-bold" title="記録者">
-                担当: {shiftData.reporter || '未詳'}
-              </span>
+              shiftData.reporter?.trim() ? (
+                <span className="inline-flex items-center text-xs text-slate-700 bg-white/80 border border-slate-200 px-2 py-0.5 rounded-md font-bold" title="記録者">
+                  担当: {shiftData.reporter}
+                </span>
+              ) : null
             )}
             {!shiftData && (
               <span className="text-xs text-slate-500 font-bold">
@@ -366,7 +369,7 @@ export default function ReportCard({
                         className={`flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[11px] font-black transition-all cursor-pointer shadow-3xs ${
                           shiftInst.confirmed
                             ? 'bg-emerald-600 text-white border border-emerald-500 shadow-xs'
-                            : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300'
+                            : 'bg-red-600 hover:bg-red-700 text-white border border-red-700 shadow-xs'
                         }`}
                         title={`クリックで${title}の指示の確認状態を切り替え`}
                       >
@@ -462,6 +465,19 @@ export default function ReportCard({
             </span>
           )}
         </div>
+
+        {/* Delete report button */}
+        {report && onDeleteReport && (
+          <button
+            type="button"
+            onClick={() => onDeleteReport(report.id)}
+            className="flex items-center space-x-1 bg-white/15 hover:bg-rose-600 text-white border border-white/30 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-3xs"
+            title="この日のすべての記録を完全に削除"
+          >
+            <Trash2 className="h-3.5 w-3.5 text-white" />
+            <span className="hidden sm:inline">全記録削除</span>
+          </button>
+        )}
       </div>
 
       {/* Main Body */}
@@ -541,7 +557,7 @@ export default function ReportCard({
                     className={`flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-black transition-all cursor-pointer shadow-3xs ${
                       report?.yamamotoInstructions?.confirmed
                         ? 'bg-emerald-600 text-white border border-emerald-500'
-                        : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300'
+                        : 'bg-red-600 hover:bg-red-700 text-white border border-red-700 shadow-xs'
                     }`}
                     title="クリックで全日共通指示の確認状態を切り替え"
                   >

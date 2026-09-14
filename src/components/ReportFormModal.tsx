@@ -13,7 +13,7 @@ interface ReportFormModalProps {
   initialShift?: 'morning' | 'noon' | 'night';
   editReport?: CareReport | null; // if editing an existing full day report
   isInline?: boolean; // new prop!
-  onDeleteReport?: (reportId: string) => void;
+  onDeleteReport?: (reportId: string, force?: boolean) => void;
 }
 
 const getTodayDateString = (): string => {
@@ -162,7 +162,8 @@ export default function ReportFormModal({
   // Clear current shift data and set to not-input (未入力) state
   const handleClearCurrentShift = () => {
     const recordDate = date || initialDate || getTodayDateString();
-    const existing = reports.find((r) => r.residentId === selectedResId && r.date === recordDate);
+    const existing = (editReport && reports.find(r => r.id === editReport.id)) ||
+      reports.find((r) => (r.id === `${selectedResId}_${recordDate}`) || (r.residentId === selectedResId && r.date === recordDate));
     const shiftName = shift === 'morning' ? '朝' : shift === 'noon' ? '昼' : '夜';
 
     // Clear form inputs
@@ -194,7 +195,13 @@ export default function ReportFormModal({
         !!(instText && instText.trim().length > 0);
 
       if (!hasRemaining && onDeleteReport) {
-        onDeleteReport(existing.id);
+        // If no other shifts or instructions remain, completely delete the report
+        onDeleteReport(existing.id, true);
+        if (!isInline && onClose) {
+          onClose();
+        } else {
+          setSavedMessage(`【${shiftName}の記録】をクリアし、この日の記録を未入力に戻しました。`);
+        }
       } else {
         const updated: CareReport = {
           ...existing,
@@ -203,10 +210,15 @@ export default function ReportFormModal({
           night: newNight,
         };
         onSaveReport(updated);
+        if (!isInline && onClose) {
+          onClose();
+        } else {
+          setSavedMessage(`【${shiftName}の記録】をクリアし、「未入力」状態に戻しました。`);
+        }
       }
-
+    } else {
       if (isInline) {
-        setSavedMessage(`【${shiftName}の記録】をクリアし、「未入力」状態に戻しました。`);
+        setSavedMessage(`【${shiftName}の記録】の入力をクリアしました。`);
       } else if (onClose) {
         onClose();
       }
@@ -310,13 +322,14 @@ export default function ReportFormModal({
   // Check recorded shifts for selected resident and date
   const currentResidentReport = useMemo(() => {
     const recordDate = date || initialDate || getTodayDateString();
-    return reports.find((r) => r.residentId === selectedResId && r.date === recordDate);
-  }, [reports, selectedResId, date, initialDate]);
+    return (editReport && reports.find((r) => r.id === editReport.id)) ||
+      reports.find((r) => (r.id === `${selectedResId}_${recordDate}`) || (r.residentId === selectedResId && r.date === recordDate));
+  }, [reports, selectedResId, date, initialDate, editReport]);
 
   const morningRecorded = hasShiftData(currentResidentReport?.morning);
   const noonRecorded = hasShiftData(currentResidentReport?.noon);
   const nightRecorded = hasShiftData(currentResidentReport?.night);
-  const currentShiftHasData = hasShiftData(currentResidentReport?.[shift]);
+  const currentShiftHasData = hasShiftData(currentResidentReport?.[shift]) || !!(reporter || staple || side || lacol || water || kt || bpSys || bpDia || pr || otherText || poorHealth.length || injuryGait.length || elimination.length);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -879,7 +892,7 @@ export default function ReportFormModal({
                     onClick={() => toggleCategory(opt, poorHealth, setPoorHealth)}
                     className={`rounded px-2.5 py-1 text-xs font-semibold border transition-all cursor-pointer ${
                       isChecked
-                        ? 'bg-red-500 border-red-500 text-white shadow-xs font-bold'
+                        ? 'bg-orange-500 border-orange-600 text-white shadow-xs font-bold'
                         : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
                     }`}
                   >
@@ -1133,11 +1146,15 @@ export default function ReportFormModal({
           )}
 
           {/* Delete Button */}
-          {onDeleteReport && selectedResId && date && reports.some(r => r.residentId === selectedResId && r.date === date) && (
+          {onDeleteReport && (
+            (editReport && reports.some(r => r.id === editReport.id)) ||
+            (selectedResId && date && reports.some(r => (r.id === `${selectedResId}_${date}`) || (r.residentId === selectedResId && r.date === date)))
+          ) && (
             <button
               type="button"
               onClick={() => {
-                const existing = reports.find(r => r.residentId === selectedResId && r.date === date);
+                const existing = (editReport && reports.find(r => r.id === editReport.id)) ||
+                  reports.find(r => (r.id === `${selectedResId}_${date}`) || (r.residentId === selectedResId && r.date === date));
                 if (existing) {
                   onDeleteReport(existing.id);
                   if (!isInline && onClose) {
@@ -1157,7 +1174,7 @@ export default function ReportFormModal({
                     setBpSys('');
                     setBpDia('');
                     setPr('');
-                    setSavedMessage('記録を完全に削除しました。');
+                    setSavedMessage('記録の削除処理を実行しました。');
                   }
                 }
               }}
