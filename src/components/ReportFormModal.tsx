@@ -39,7 +39,7 @@ export default function ReportFormModal({
 }: ReportFormModalProps) {
   // Primary Keys
   const [selectedResId, setSelectedResId] = useState<string>('');
-  const [date, setDate] = useState<string>('');
+  const [date, setDate] = useState<string>(() => initialDate || getTodayDateString());
   const [shift, setShift] = useState<'morning' | 'noon' | 'night'>('morning');
 
   // Form Fields
@@ -254,8 +254,10 @@ export default function ReportFormModal({
       return;
     }
 
+    const recordDate = date || initialDate || getTodayDateString();
+
     // 1. Check if we already have a report for this resident + date
-    const existingIndex = reports.findIndex((r) => r.residentId === selectedResId && r.date === date);
+    const existingIndex = reports.findIndex((r) => r.residentId === selectedResId && r.date === recordDate);
     
     // Create the updated shift record
     const shiftRecord: ShiftRecord = {
@@ -287,23 +289,28 @@ export default function ReportFormModal({
       const existing = reports[existingIndex];
       updatedReport = {
         ...existing,
+        date: recordDate,
         [shift]: shiftRecord,
-        yamamotoInstructions: {
-          text: instructionsText.trim(),
-          confirmed: instructionsText.trim() === existing.yamamotoInstructions?.text ? existing.yamamotoInstructions?.confirmed : false, // reset confirm if text edited
-        },
+        yamamotoInstructions: isInline
+          ? (existing.yamamotoInstructions || { text: '', confirmed: false })
+          : {
+              text: instructionsText.trim(),
+              confirmed: instructionsText.trim() === (existing.yamamotoInstructions?.text || '')
+                ? (existing.yamamotoInstructions?.confirmed ?? false)
+                : false, // reset confirm if text edited
+            },
       };
     } else {
       // Create completely new report
       updatedReport = {
-        id: `${selectedResId}_${date}`,
+        id: `${selectedResId}_${recordDate}`,
         residentId: selectedResId,
-        date: date,
+        date: recordDate,
         morning: shift === 'morning' ? shiftRecord : null,
         noon: shift === 'noon' ? shiftRecord : null,
         night: shift === 'night' ? shiftRecord : null,
         yamamotoInstructions: {
-          text: instructionsText.trim(),
+          text: isInline ? '' : instructionsText.trim(),
           confirmed: false,
         },
         confirmedByDirector: false,
@@ -315,7 +322,8 @@ export default function ReportFormModal({
     if (isInline) {
       const targetRes = residents.find((r) => r.id === selectedResId);
       const shiftName = shift === 'morning' ? '朝' : shift === 'noon' ? '昼' : '夜';
-      setSavedMessage(`🎉 ${targetRes?.roomNumber || ''}号室: ${targetRes?.name || ''} 様 の【${shiftName}の記録】を正常に保存しました！`);
+      const formattedDate = recordDate.replace(/-/g, '/');
+      setSavedMessage(`🎉 ${targetRes?.roomNumber ? `${targetRes.roomNumber}号室: ` : ''}${targetRes?.name || ''} 様 の【${formattedDate} ${shiftName}の記録】を正常に保存・反映しました！`);
       
       // Auto-clear form state completely
       setSelectedResId('');

@@ -74,81 +74,79 @@ export default function App() {
     // One-time initialization if database is completely empty
     const initializeDb = async () => {
       try {
-        const resSnapshot = await getDocs(collection(db, 'residents'));
         const alreadySeeded = localStorage.getItem('care_residents_seeded_v2') === 'true';
+        if (alreadySeeded) return;
 
+        const resSnapshot = await getDocs(collection(db, 'residents'));
         if (!resSnapshot.empty) {
           localStorage.setItem('care_residents_seeded_v2', 'true');
           return;
         }
 
-        if (resSnapshot.empty && !alreadySeeded) {
-          console.log("Firestore residents collection is empty. Checking local storage...");
-          const savedResidents = localStorage.getItem('care_residents_list');
-          if (savedResidents) {
-            try {
-              const parsed = JSON.parse(savedResidents) as Resident[];
-              if (parsed.length > 0) {
-                console.log("Seeding Firestore with corrected local residents list...");
-                for (const res of parsed) {
-                  await setDoc(doc(db, 'residents', res.id), res);
-                }
-                localStorage.setItem('care_residents_seeded_v2', 'true');
-                return;
+        console.log("Firestore residents collection is empty. Checking local storage...");
+        const savedResidents = localStorage.getItem('care_residents_list');
+        if (savedResidents) {
+          try {
+            const parsed = JSON.parse(savedResidents) as Resident[];
+            if (parsed.length > 0) {
+              console.log("Seeding Firestore with corrected local residents list...");
+              for (const res of parsed) {
+                await setDoc(doc(db, 'residents', res.id), res);
               }
-            } catch (e) {
-              console.error("Error parsing saved residents for seeding:", e);
+              localStorage.setItem('care_residents_seeded_v2', 'true');
+              return;
             }
+          } catch (e) {
+            console.error("Error parsing saved residents for seeding:", e);
           }
-          // If no local storage corrections, seed the original list
-          console.log("No local residents found. Seeding default initial residents...");
-          for (const res of initialResidents) {
-            await setDoc(doc(db, 'residents', res.id), res);
-          }
-          localStorage.setItem('care_residents_seeded_v2', 'true');
         }
+        // If no local storage corrections, seed the original list
+        console.log("No local residents found. Seeding default initial residents...");
+        for (const res of initialResidents) {
+          await setDoc(doc(db, 'residents', res.id), res);
+        }
+        localStorage.setItem('care_residents_seeded_v2', 'true');
       } catch (err) {
-        console.error("Error checking/seeding residents in Firestore:", err);
+        console.warn("Notice: Offline or quota limit during residents initialization (fallback to local state):", err);
       }
     };
 
     const initializeReportsDb = async () => {
       try {
-        const repSnapshot = await getDocs(collection(db, 'reports'));
         const alreadySeeded = localStorage.getItem('care_reports_seeded_v2') === 'true';
+        if (alreadySeeded) return;
 
+        const repSnapshot = await getDocs(collection(db, 'reports'));
         if (!repSnapshot.empty) {
           localStorage.setItem('care_reports_seeded_v2', 'true');
           return;
         }
 
-        if (repSnapshot.empty && !alreadySeeded) {
-          console.log("Firestore reports collection is empty. Checking local storage...");
-          const savedReports = localStorage.getItem('care_reports_list');
-          if (savedReports) {
-            try {
-              const parsed = JSON.parse(savedReports) as CareReport[];
-              if (parsed.length > 0) {
-                console.log("Seeding Firestore with corrected local reports list...");
-                for (const rep of parsed) {
-                  await setDoc(doc(db, 'reports', rep.id), rep);
-                }
-                localStorage.setItem('care_reports_seeded_v2', 'true');
-                return;
+        console.log("Firestore reports collection is empty. Checking local storage...");
+        const savedReports = localStorage.getItem('care_reports_list');
+        if (savedReports) {
+          try {
+            const parsed = JSON.parse(savedReports) as CareReport[];
+            if (parsed.length > 0) {
+              console.log("Seeding Firestore with corrected local reports list...");
+              for (const rep of parsed) {
+                await setDoc(doc(db, 'reports', rep.id), rep);
               }
-            } catch (e) {
-              console.error("Error parsing saved reports for seeding:", e);
+              localStorage.setItem('care_reports_seeded_v2', 'true');
+              return;
             }
+          } catch (e) {
+            console.error("Error parsing saved reports for seeding:", e);
           }
-          // If no local storage corrections, seed the original reports
-          console.log("No local reports found. Seeding default initial reports...");
-          for (const rep of initialReports) {
-            await setDoc(doc(db, 'reports', rep.id), rep);
-          }
-          localStorage.setItem('care_reports_seeded_v2', 'true');
         }
+        // If no local storage corrections, seed the original reports
+        console.log("No local reports found. Seeding default initial reports...");
+        for (const rep of initialReports) {
+          await setDoc(doc(db, 'reports', rep.id), rep);
+        }
+        localStorage.setItem('care_reports_seeded_v2', 'true');
       } catch (err) {
-        console.error("Error checking/seeding reports in Firestore:", err);
+        console.warn("Notice: Offline or quota limit during reports initialization (fallback to local state):", err);
       }
     };
 
@@ -164,9 +162,16 @@ export default function App() {
       snapshot.forEach((doc) => {
         list.push(doc.data() as Resident);
       });
-      setResidents(list);
+      if (list.length > 0) {
+        setResidents(list);
+        try {
+          localStorage.setItem('care_residents_list', JSON.stringify(list));
+        } catch (e) {
+          console.error(e);
+        }
+      }
     }, (error) => {
-      console.error("Residents collection subscribe error:", error);
+      console.warn("Residents collection subscription status (using local device storage):", error);
     });
 
     // 2. Subscribe to reports
@@ -175,9 +180,23 @@ export default function App() {
       snapshot.forEach((doc) => {
         list.push(doc.data() as CareReport);
       });
-      setReports(list);
+      if (list.length > 0) {
+        setReports((prev) => {
+          // Merge Firestore snapshot with local state so newly recorded local entries are preserved
+          const map = new Map<string, CareReport>();
+          prev.forEach((r) => map.set(r.id, r));
+          list.forEach((r) => map.set(r.id, r));
+          const merged = Array.from(map.values());
+          try {
+            localStorage.setItem('care_reports_list', JSON.stringify(merged));
+          } catch (e) {
+            console.error(e);
+          }
+          return merged;
+        });
+      }
     }, (error) => {
-      console.error("Reports collection subscribe error:", error);
+      console.warn("Reports collection subscription status (using local device storage):", error);
     });
 
     return () => {
@@ -584,11 +603,36 @@ export default function App() {
   
   // Save or update report
   const handleSaveReport = async (updatedRep: CareReport) => {
+    // 1. Immediately update React state and localStorage (optimistic & resilient to quota/offline)
+    setReports((prev) => {
+      const idx = prev.findIndex((r) => r.id === updatedRep.id || (r.residentId === updatedRep.residentId && r.date === updatedRep.date));
+      let next: CareReport[];
+      if (idx >= 0) {
+        next = [...prev];
+        next[idx] = updatedRep;
+      } else {
+        next = [updatedRep, ...prev];
+      }
+      try {
+        localStorage.setItem('care_reports_list', JSON.stringify(next));
+      } catch (err) {
+        console.error("Failed to write reports to localStorage:", err);
+      }
+      return next;
+    });
+
+    // Match selectedDate to the saved record's date so it is immediately visible in tabs
+    if (updatedRep.date) {
+      setSelectedDate(updatedRep.date);
+    }
+
+    // 2. Synchronize to Firestore
     try {
       await setDoc(doc(db, 'reports', updatedRep.id), updatedRep);
     } catch (error) {
-      console.error("Error saving report to Firestore:", error);
+      console.warn("Firestore sync warning (record is safely stored locally on device):", error);
     }
+
     if (appMode === 'helper') {
       setHelperFormResId('');
     }
@@ -616,29 +660,44 @@ export default function App() {
       reportId = `${resId}_${targetDate}`;
     }
 
-    try {
-      if (existing) {
-        await setDoc(doc(db, 'reports', reportId), {
-          ...existing,
-          yamamotoInstructions: {
-            ...existing.yamamotoInstructions,
-            text,
-          }
-        });
-      } else {
-        await setDoc(doc(db, 'reports', reportId), {
-          id: reportId,
-          residentId: resId,
-          date: targetDate,
-          morning: null,
-          noon: null,
-          night: null,
-          yamamotoInstructions: { text, confirmed: false },
-          confirmedByDirector: false,
-        });
+    const newReport: CareReport = existing ? {
+      ...existing,
+      yamamotoInstructions: {
+        ...existing.yamamotoInstructions,
+        text,
       }
+    } : {
+      id: reportId,
+      residentId: resId,
+      date: targetDate,
+      morning: null,
+      noon: null,
+      night: null,
+      yamamotoInstructions: { text, confirmed: false },
+      confirmedByDirector: false,
+    };
+
+    setReports((prev) => {
+      const idx = prev.findIndex((r) => r.id === reportId);
+      let next: CareReport[];
+      if (idx >= 0) {
+        next = [...prev];
+        next[idx] = newReport;
+      } else {
+        next = [newReport, ...prev];
+      }
+      try {
+        localStorage.setItem('care_reports_list', JSON.stringify(next));
+      } catch (err) {
+        console.error(err);
+      }
+      return next;
+    });
+
+    try {
+      await setDoc(doc(db, 'reports', reportId), newReport);
     } catch (error) {
-      console.error("Error saving instructions to Firestore:", error);
+      console.warn("Error saving instructions to Firestore (saved locally):", error);
     }
   };
 
@@ -664,30 +723,44 @@ export default function App() {
       reportId = `${resId}_${targetDate}`;
     }
 
-    try {
-      if (existing) {
-        await setDoc(doc(db, 'reports', reportId), {
-          ...existing,
-          yamamotoInstructions: {
-            ...existing.yamamotoInstructions,
-            confirmed: !existing.yamamotoInstructions.confirmed,
-          }
-        });
-      } else {
-        // Create a new empty report with confirmation
-        await setDoc(doc(db, 'reports', reportId), {
-          id: reportId,
-          residentId: resId,
-          date: targetDate,
-          morning: null,
-          noon: null,
-          night: null,
-          yamamotoInstructions: { text: '', confirmed: true },
-          confirmedByDirector: false,
-        });
+    const toggledReport: CareReport = existing ? {
+      ...existing,
+      yamamotoInstructions: {
+        ...existing.yamamotoInstructions,
+        confirmed: !existing.yamamotoInstructions?.confirmed,
       }
+    } : {
+      id: reportId,
+      residentId: resId,
+      date: targetDate,
+      morning: null,
+      noon: null,
+      night: null,
+      yamamotoInstructions: { text: '', confirmed: true },
+      confirmedByDirector: false,
+    };
+
+    setReports((prev) => {
+      const idx = prev.findIndex((r) => r.id === reportId);
+      let next: CareReport[];
+      if (idx >= 0) {
+        next = [...prev];
+        next[idx] = toggledReport;
+      } else {
+        next = [toggledReport, ...prev];
+      }
+      try {
+        localStorage.setItem('care_reports_list', JSON.stringify(next));
+      } catch (err) {
+        console.error(err);
+      }
+      return next;
+    });
+
+    try {
+      await setDoc(doc(db, 'reports', reportId), toggledReport);
     } catch (error) {
-      console.error("Error toggling confirmation in Firestore:", error);
+      console.warn("Error toggling confirmation in Firestore (saved locally):", error);
     }
   };
 
@@ -703,15 +776,32 @@ export default function App() {
       return;
     }
 
+    setReports((prev) => {
+      const next = prev.filter((r) => r.id !== reportId);
+      try {
+        localStorage.setItem('care_reports_list', JSON.stringify(next));
+      } catch (err) {
+        console.error(err);
+      }
+      return next;
+    });
+
     try {
       await deleteDoc(doc(db, 'reports', reportId));
     } catch (error) {
-      console.error("Error deleting report from Firestore:", error);
+      console.warn("Error deleting report from Firestore:", error);
     }
   };
 
   // Save or update residents list to Firestore
   const handleUpdateResidents = async (updated: Resident[]) => {
+    setResidents(updated);
+    try {
+      localStorage.setItem('care_residents_list', JSON.stringify(updated));
+    } catch (err) {
+      console.error(err);
+    }
+
     try {
       // Determine deleted residents
       const oldIds = residents.map((r) => r.id);
@@ -728,7 +818,7 @@ export default function App() {
         await setDoc(doc(db, 'residents', res.id), res);
       }
     } catch (error) {
-      console.error("Error updating residents in Firestore:", error);
+      console.warn("Error updating residents in Firestore (saved locally):", error);
     }
   };
 

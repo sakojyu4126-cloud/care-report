@@ -23,19 +23,6 @@ async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     console.log("Firebase Connection Successful!");
-    
-    // Diagnostic log for debugging database contents
-    const resSnap = await getDocs(collection(db, 'residents'));
-    console.log("DIAGNOSTIC: Residents in Firestore:");
-    resSnap.forEach(d => {
-      console.log(` - ID: ${d.id}, Name: ${d.data().name}, Room: ${d.data().roomNumber}`);
-    });
-
-    const repSnap = await getDocs(collection(db, 'reports'));
-    console.log("DIAGNOSTIC: Reports in Firestore:");
-    repSnap.forEach(d => {
-      console.log(` - ReportID: ${d.id}, ResidentID: ${d.data().residentId}, Date: ${d.data().date}`);
-    });
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error("Please check your Firebase configuration. The client is offline.");
