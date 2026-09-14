@@ -557,7 +557,7 @@ export default function App() {
             </div>
             {(shiftData.meals.lacol || shiftData.meals.water) && (
               <div className="flex justify-between text-[10px]">
-                <span className="text-slate-400">ラコール/水分:</span>
+                <span className="text-slate-400">ラコール等栄養剤/水分:</span>
                 <span className="font-semibold text-slate-700">
                   {shiftData.meals.lacol ? `${shiftData.meals.lacol}P` : '-'}/{shiftData.meals.water ? `${shiftData.meals.water}ml` : '-'}
                 </span>

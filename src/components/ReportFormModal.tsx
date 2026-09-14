@@ -783,7 +783,7 @@ export default function ReportFormModal({
                 />
               </div>
               <div>
-                <label className="block text-slate-600 font-bold mb-1">ラコール等</label>
+                <label className="block text-slate-600 font-bold mb-1">ラコール等栄養剤</label>
                 <select
                   value={lacol}
                   onChange={(e) => setLacol(e.target.value)}

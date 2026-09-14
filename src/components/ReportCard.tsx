@@ -244,7 +244,7 @@ export default function ReportCard({
               </div>
               {shiftData.meals.lacol && (
                 <div className="col-span-2 flex items-center space-x-1.5 pt-0.5">
-                  <span className="text-slate-500 font-bold">ラコール:</span>{' '}
+                  <span className="text-slate-500 font-bold">ラコール等栄養剤:</span>{' '}
                   <span className="bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded font-black text-xs border border-emerald-300">
                     {shiftData.meals.lacol}
                   </span>
